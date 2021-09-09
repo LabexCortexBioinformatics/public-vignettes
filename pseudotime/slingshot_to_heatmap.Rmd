@@ -1,0 +1,167 @@
+---
+title: "Slingshot to Heatmap"
+author: "Emeric Texeraud"
+date: "08/04/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages, message=FALSE, warning=FALSE}
+library(Seurat)
+library(SeuratWrappers)
+library(slingshot)
+library(tradeSeq)
+library(dplyr)
+library(viridis)
+library(scales)
+library(zoo)
+library(pheatmap)
+```
+
+## Slingshot
+
+Here we prepare the object for slingshot. If you don't need to subset your object, or already preprocessed it, you will just need to load it and transform it to a single cell experiment object.
+```{r prepare for slingshot, eval=FALSE}
+# load Seurat object
+setwd('/mnt/Data1/Raineteau/seur_subseur')
+seur <- readRDS('neuron_1k.CLB_final.rds')
+
+seursce <- as.SingleCellExperiment(seur)
+```
+
+We then run the slingshot function, to find the graph in our dataset, and then run the pseudotime on this graph.
+```{r run slingshot, eval=FALSE}
+# run graph
+seursds <- slingshot(seursce, clusterLabels = as.character(seur$new_clusters), reducedDim = "UMAP", start.clus = "cluster10")
+# keep only slingshot information
+seursling <- SlingshotDataSet(seursds)
+saveRDS(seursling, file="/home/labex-bioinfo/pseudotime/data/neuron_1k_no_alra_slingshot_qNSCs_axis_slingdataset.rds")
+# run pseudotime
+seurpt <- slingPseudotime(seursling)
+```
+
+After running the pseudotime, we can plot the pseudotime and the graph associated with each curves.
+```{r plot slingshot, eval=FALSE}
+# will show every curve and their pseudotime
+# change number of columns in final plot here
+nc <- 1
+nms <- colnames(seurpt)
+nr <- ceiling(length(nms)/nc)
+# change palette
+pall <- viridis(100, end = 0.95)
+par(mfrow = c(nr, nc))
+for (i in nms) {
+  colors <- pall[cut(seurpt[,i], breaks = 100)]
+  plot(reducedDim(seursling), col = colors, pch = 16, cex = 0.5, main = i)
+  lines(seursling, lwd = 2, col = 'black', type = 'lineages')
+}
+```
+
+We can extract the pseudotime values and put it in the Seurat metadata
+```{r plot pseudotime with Seurat, eval=FALSE}
+# add curve of interest to Seurat metadata
+seurpt <- as.data.frame(seurpt)
+seur@meta.data$curve1 <- seurpt[["curve1"]]
+
+# plot pseudotime on seurat object
+FeaturePlot(seur, "curve1", pt.size = 3)
++ scale_colour_viridis_c(na.value = "grey90") # optional, change colormap
++ NoAxes() # optional, remove axes
++ theme(plot.title = element_blank()) # optional remove title
+
+# if subsetted, you can add the pseudotime on the original Seurat object and see how it is on its UMAP
+seur@meta.data[Cells(seur), "slingshot_neuron_1k_neuron"] <- seur@meta.data$curve1
+FeaturePlot(seur, "slingshot_neuron_1k_neuron", pt.size = 3)
++ scale_colour_viridis_c(na.value = "grey90") # optional, change colormap
++ NoAxes() # optional, remove axes
++ theme(plot.title = element_blank()) # optional remove title
+```
+
+Another mean to plot the pseudotime, more complex, but prettier, with every point having a pseudotime on the front and all points with NA on the back. You can change the color of the cells by changing the function `scale_color_viridis_c()` and the color of the na cells by changing the parameter `na.value`.
+```{r plot pseudotime complex, eval=FALSE}
+map_coord <- as.data.frame(Nx@reductions$umap@cell.embeddings)
+map_coord$pseudo <- Nx@meta.data$slingshot_neuron_1k
+map_coord_na <- subset(map_coord, (is.na(map_coord[,3])))
+map_coord_no_na <- subset(map_coord, (!is.na(map_coord[,3])))
+ggplot(data = map_coord_na, aes(x = UMAP_1, y = UMAP_2, colour = pseudo)) + 
+  geom_point() +
+  geom_point(data = map_coord_no_na) + 
+  scale_colour_viridis_c(na.value = "grey90") +
+  theme(plot.title = element_blank(),
+        axis.line=element_blank(),
+        axis.text.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks=element_blank(),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank(),
+        panel.background=element_blank())
+```
+
+## Tradeseq + heatmap
+
+Before running tradeseq and doing the heatmap, we need to select we want/don't want, keeping all the genes will make tradeseq have a memory overflow. We usually keep 2000 or 4000 most variable genes after removing the genes we don't want (here all genes beginning with either Rps, Rpl, mt-). We then need to extract the count matrix with these 2000 or 4000 genes.
+```{r prepare for tradeseq, eval=FALSE}
+sling <- readRDS(file="/home/labex-bioinfo/pseudotime/data/neuron_1k_no_alra_slingshot_qNSCs_axis_slingdataset.rds")
+seur <- readRDS(file = "/home/labex-bioinfo/pseudotime/data/neuron_1k_no_alra_slingshot_qNSCs_axis_subset.rds")
+
+seur <- subset(seur, features = grep("^(Rps|Rpl|mt-)", row.names(seur), invert = TRUE)) # if you want to remove some genes
+
+# find variable features and extract the counts matrix of these genes 
+seur <- FindVariableFeatures(seur, nfeatures = 4000)
+variableGenes <- as.data.frame(seur@assays[["RNA"]]@meta.features[["vst.variable"]], row.names = row.names(seur))
+variableGenes$zero = 0 # Need 2 columns minimum when subsetting dataframe, otherwise will have a vector of TRUE with no gene names
+variableGenes <- row.names(variableGenes[variableGenes[['seur@assays[["RNA"]]@meta.features[["vst.variable"]]']] == TRUE,])
+counts <- as.matrix(seur@assays$RNA@counts)[variableGenes,]
+```
+
+After extracting the counts matrix, we evaluate the best number of knots for the fitGAM function. For that we use the `evaluateK` function, and we search for the best number ok knot in the second plot. It is the same process as when searching for the best number of dimensions on an elbowplot. We then set up the parallelization parameters and run the fitGAM with the number of knot found previously. The fitGAM will fit all our genes on a mathematical model, which can take a bit of time.
+```{r tradeseq fitGAM, eval=FALSE}
+# Evaluate k, run if you don't know how many knots to use in fitGAM
+icMat <- evaluateK(counts = counts, sds = sling, k = 3:10,
+                   nGenes = 200, verbose = T)
+
+# prepare multithreading
+BPPARAM <- BiocParallel::bpparam()
+BPPARAM$workers <- 8 # use ncores
+
+# fitGAM and save output
+sce <- fitGAM(counts = counts, sds = sling, nknots = 6, verbose = TRUE, parallel=TRUE, BPPARAM = BPPARAM)
+saveRDS(sce, file="/home/labex-bioinfo/pseudotime/data/neuron_1k_no_alra_slingshot_qNSCs_axis_fitGAM_4000_test.rds")
+```
+
+The association test will then use the mathematical model to find which genes are the most correlated with the pseudotime, and we then order them by importance using the waldStat, and keep the number of genes we want for the heatmap.
+```{r tradeseq association test, eval=FALSE}
+# run association test
+assoRes <- associationTest(sce)
+orderedassoRes <- assoRes %>% arrange(desc(waldStat))
+assoRes_heat <- orderedassoRes[1:100,]
+```
+
+Now that we know which genes we will use, we can prepare all the data for the heatmap. We order the genes following the pseudotime, using a sliding window that will scan the entire data frame and detect the window with the most expression for each gene.
+```{r prepare heatmap, eval=FALSE}
+# Get pseudotime
+pseudo <- as.data.frame(slingPseudotime(sling))
+pseudo <- pseudo %>% arrange(curve1)
+
+# reorder genes for heatmap following pseudotime, and rescale counts
+counts_heat <- counts[row.names(assoRes_heat),row.names(pseudo)]
+# sliding window to order genes
+counts_heat_ordered <- counts_heat[order(apply(t(rollapply(t(counts_heat), width=5, by=1, FUN=mean)), 1, which.max)), ] # :demon:
+counts_heat_scaled <- t(apply(counts_heat_ordered, 1, rescale))
+
+# get clusters
+clusters <- seur@meta.data$new_clusters
+clusters <- as.data.frame(clusters, row.names = Cells(seur))
+```
+
+We can now plot the heatmap.
+```{r plot heatmap, eval=FALSE}
+# draw heatmap
+pheatmap(counts_heat_scaled, main = "main", 
+         cluster_rows = FALSE, cluster_cols = FALSE, 
+         show_rownames = TRUE, show_colnames = FALSE, 
+         annotation_col = clusters, color = magma(100), fontsize_row = 8)
+```

@@ -1,0 +1,43 @@
+---
+title: "Velocyto tutorial on public data"
+author: "[LabEx CORTEX Bioinformatics Platform](https://labex-cortex.universite-lyon.fr/) - Lyon 1 University - vignette produced by Emeric Texeraud"
+date: "`r Sys.Date()`"
+output: html_notebook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Velocyto for 10X <a name="velocyto"></a>
+Velocyto is a library for the analysis of RNA velocity.
+To use velocyto on anything else than 10X samples see the [documentation](https://velocyto.org/velocyto.py/tutorial/cli.html).
+
+We use velocyto to generate spliced/unspliced information from cellranger count necessary for the package scVelo which calculates the RNA velocity.
+
+### Installation
+For the installation, follow the following [guide](https://velocyto.org/velocyto.py/install/index.html). Velocyto requires conda and python.
+
+To obtain the velocyto version, run `velocyto --version`.
+
+To verify if there is a new version, and update velocyto, run `pip install -U --no-deps velocyto`.
+
+
+### Main command <a name="main"></a>
+To generate spliced/unspliced counts, velocyto needs the outputs of Cell Ranger (`molecule_info.h5` file) and the genome annotation file used with Cell Ranger. The -@ option allows to specify the number of thread to use when sorting the bam file with samtools, and the --samtools-memory allows to specify the memory (in Mo) used by each thread. Take caution, the memory is the memory used by **each thread**, the amount of memory on your computer/calculator should be at least `number of thread X samtools-memory`.
+```{bash run_velocyto, eval=FALSE}
+velocyto run10x -@ 32 --samtools-memory 2048 /mnt/Data1/public_vignettes/cellranger_output/neuron_1k/ /opt/cellranger/transcriptome/refdata-gex-mm10-2020-A/genes/genes.gtf
+```
+Velocyto produces a new directory called velocyto within the cellranger project directory, containing a loom file.
+
+If you want to power off the computer automatically at the end of the task, add `; shutdown -h now` :
+```{bash run_velocyto_shutdown, eval=FALSE}
+velocyto run10x -@ 32 --samtools-memory 2048 /mnt/Data1/public_vignettes/cellranger_output/neuron_1k/ /opt/cellranger/transcriptome/refdata-gex-mm10-2020-A/genes/genes.gtf; shutdown -h now
+```
+
+
+### Troubleshooting <a name="trouble"></a>
+If you encounter any memory problem, it most likely comes from the samtools version. For version 0.17.17 of velocyto, samtools version **1.11** works well :
+```{python samtools 1.11, eval=FALSE}
+conda install samtools==1.11
+```

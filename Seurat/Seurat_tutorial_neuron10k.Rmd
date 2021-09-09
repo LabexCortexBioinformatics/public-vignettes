@@ -1,0 +1,196 @@
+---
+title: "Seurat tutorial on public data"
+author: "[LabEx CORTEX Bioinformatics Platform](https://labex-cortex.universite-lyon.fr/) - Lyon 1 University - vignette produced by Emeric Texeraud"
+date: "`r Sys.Date()`"
+output: html_notebook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load packages
+```{r, warning=FALSE, include=TRUE}
+library(tidyverse, quietly = TRUE)
+library(Seurat, quietly = TRUE)
+library(patchwork)
+library(scater)
+```
+
+# 1. Overview of all cells
+## Setup the Seurat Object
+```{r, warning=FALSE, include=TRUE}
+# Load  the public dataset
+seurat_matrix <- Read10X('/mnt/Data1/public_vignettes/cellranger_output/neuron_10k/outs/filtered_feature_bc_matrix')
+seur <- CreateSeuratObject(counts = seurat_matrix, project = "neuron_1k", min.cells = 3, min.features = 100)
+seur
+```
+
+## QC and sctransform
+### QC
+QC metrics
+```{r, fig.width=12, fig.asp=0.3, warning=FALSE, error=FALSE}
+# QC metrics calculation and visualization
+seur$percent.mt <- PercentageFeatureSet(seur, pattern = "^mt-")
+seur$percent.ribo <- PercentageFeatureSet(seur, pattern = "^Rp[sl][[:digit:]]")
+VlnPlot(seur, features = c("nFeature_RNA", "nCount_RNA", "percent.mt", "percent.ribo"), ncol = 4, pt.size = 0.1)
+```
+
+Distribution of the data
+```{r, fig.width=6, fig.asp=0.6, warning=FALSE, error=FALSE}
+FeatureScatter(seur, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+```
+
+We remove cells that makes nCount_RNA plot unreadable, and cells which have too much mitochondrial genes.
+```{r}
+seur = subset(seur, subset = (percent.mt < 20 & nCount_RNA < 50000))
+```
+
+```{r, fig.width=12, fig.asp=0.3, warning=FALSE, error=FALSE}
+VlnPlot(seur, features = c("nFeature_RNA", "nCount_RNA", "percent.mt", "percent.ribo"), ncol = 4, pt.size = 0.1)
+```
+```{r, fig.width=6, fig.asp=.7, warning=FALSE, error=FALSE}
+FeatureScatter(seur, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", group.by = "orig.ident")
+```
+We still have cells having too much counts, we will removes them, as well as the cells having too few features, which cannot be true cells.
+```{r}
+seur = subset(seur, subset = (nFeature_RNA > 1000 & nCount_RNA < 30000) & percent.mt < 15)
+```
+
+```{r, fig.width=6, fig.asp=.7, warning=FALSE, error=FALSE}
+FeatureScatter(seur, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", group.by = "orig.ident")
+```
+Now we have very few cells far from the gradient, which is a good thing, as nFeature_RNA and nCount_RNA should be proportional.
+
+### sctransform normalization
+The latest version of sctransform also supports using glmGamPoi package which substantially improves the speed of the learning procedure. It can be invoked by specifying method="glmGamPoi".
+This single command replaces NormalizeData(), ScaleData(), and FindVariableFeatures().
+```{r}
+seur <- SCTransform(seur, method = "glmGamPoi", verbose = FALSE)
+```
+
+### linear dimensional reduction and the ‘dimensionality’ of the dataset
+```{r, warning=FALSE, fig.width=3, fig.asp=1}
+seur <- RunPCA(seur, verbose = FALSE)
+ElbowPlot(seur, ndims = 50)
+```
+Here we take a number of PC around the elbow, where the curve flattens, it is a sufficient number of PC to explain most of the deviation. Here it is around 10 PCs.
+
+```{r, warning=FALSE, fig.width=8, fig.asp=1.5}
+DimHeatmap(seur, dims = 1:20, assays = "SCT", ncol = 4)
+```
+The majority of true signal is captured in the first 12 PCs, so we will use 13 PCs to analyse data. After 13 PCs, most of the yellow and purple signals are mixed, and thus the superior PCs don't explain a lot of variance.
+
+### Non-linear dimensional reduction (UMAP)
+```{r, fig.width=8, fig.asp=0.5, warning=FALSE, message=FALSE}
+#Cluster the cells
+DefaultAssay(seur) <- "SCT"
+seur <- FindNeighbors(seur, dims = 1:13, verbose = FALSE)
+seur <- FindClusters(seur, resolution = 0.5, verbose = FALSE)
+#Reduction
+seur <- RunUMAP(seur, dims = 1:13, verbose = FALSE)
+DimPlot(seur, label = TRUE, pt.size = 0.8) + NoLegend() + ggtitle("dim13_res0.5")
+```
+We have 17 clusters in the dataset.
+
+### Individual cluster metrics on res0.5 for hi resolution
+```{r, fig.width=10, fig.asp=0.6}
+VlnPlot(seur, features = c("nFeature_RNA", "nCount_RNA", "percent.mt", "percent.ribo"), ncol = 2,
+        group.by = "seurat_clusters", pt.size = 0.1)
+```
+None of the clusters seems to have a significantly bad quality
+
+### Identification of cluster biomarkers
+```{r}
+markers.dim12 <-FindAllMarkers(seur, logfc.threshold = 1, min.pct = 0.5, verbose = FALSE, assay = "RNA", only.pos = TRUE)
+top10.markers.dim12 = markers.dim12 %>% mutate(diff.pct = (pct.1 - pct.2)) %>% group_by(cluster) %>%
+  slice_max(order_by = avg_log2FC, n = 20) %>% slice_min(order_by = p_val_adj, n = 10)
+top10.markers.dim12
+```
+
+```{r}
+top20.markers.dim12 = markers.dim12 %>% mutate(diff.pct = (pct.1 - pct.2)) %>% group_by(cluster) %>%
+  slice_max(order_by = avg_log2FC, n = 20)
+top20.markers.dim12
+```
+
+### Clusters annotation
+```{r}
+seur <- RenameIdents(seur, "1" = "GABA_neuron_cx1", "10" = "GABA_neuron_cx2", "13" = "cr_cells", "14" = "mural_cells", "15" = "vascular_cells", "16" = "endothelial_cells", "0" = "unknown", "2" = "migrating_neurons", "3" = "bad_cells", "4" = "GLU_neuron1", "5" = "GLU_neuron2", "6" = "GLU_neuron_cx", "7" = "NSCs1", "8" = "GLU_progenitor", "9" = "NSCs2", "11" = "GLU_neuron3", "12" = "NSCs3")
+seur$clusters <- Idents(seur)
+```
+
+
+
+### Visualization of marker expression
+```{r, fig.width=14, fig.asp=0.8}
+VlnPlot(seur, features = c("Unc5d", "Dab1", "Ube2c", "Arpp21", "Lhx6", "Eomes",
+                          "Zbtb20", "Adarb2", "Ndnf"), ncol = 3, pt.size = 0, assay = "RNA", log = TRUE)
+```
+We use the top 10 markers for each clusters to infer their identity.
+
+### Some other reference markers
+```{r, fig.width=11, fig.asp=0.4}
+VlnPlot(seur, features = c("Eomes", "Emx1", "Gsx2", "Dlx2", "Olig2", "Aqp4"), ncol = 3, pt.size = 0, assay = "RNA")
+```
+
+### Clusters annotation
+```{r}
+seur <- RenameIdents(seur, "0" = "GLU_neuron_cx", "1" = "early_neuron", "2" = "cycling_cells", "3" = "GABA_neuron_hp", "4" = "GABA_neuron_cx", "5" = "GLU_progenitor", "6" = "GABA_unknown", "7" = "GABA_cells", "8" = "cr_cells")
+seur$clusters <- Idents(seur)
+```
+
+```{r, fig.width=5, fig.asp=.7, warning=FALSE}
+DimPlot(seur, reduction = "umap", group.by = "clusters", label = TRUE, repel = TRUE) + NoLegend() + NoAxes()
+```
+
+### Store Seurat object
+```{r}
+saveRDS(seur, "/mnt/Data1/public_vignettes/seurat_data/neuron_1k.rds")
+```
+
+
+
+## Further analysis
+
+### Cell cycle analysis
+
+```{r}
+# Load  human cell cycle genes from Seurat and Change to mouse format (uppercase first letter)
+s.genes <- cc.genes.updated.2019$s.genes
+g2m.genes <- cc.genes.updated.2019$g2m.genes
+s.genes <- str_to_title(s.genes)
+g2m.genes <- str_to_title(g2m.genes)
+```
+
+Cell cycle scoring, normalization of data in RNA assay and renaming of cells to NxCLB2_
+```{r}
+# Cell cycle score, normalize in RNA assay
+seur <- CellCycleScoring(seur, s.features = s.genes, g2m.features = g2m.genes, set.ident = FALSE)
+```
+
+```{r, fig.width=8, fig.asp=0.4}
+FeaturePlot(seur, features = c("S.Score", "G2M.Score"))
+```
+The cells in cycle phasis are the cells we dubbed as cycling cells. 
+
+### Sex analysis
+
+```{r, warning=FALSE}
+Y = read.table("/mnt/Data1/public_vignettes/seurat_data/YGenes.csv", header = TRUE)
+Ygenes = as.character(Y$Ygenes)
+Ygenes = colnames(FetchData(seur, vars = Ygenes))
+Ygenes
+```
+
+```{r, fig.width=12, fig.asp=0.4}
+seur$percent_y <- PercentageFeatureSet(seur, features = Ygenes)
+#VlnPlot(seur, features = Ygenes, group.by = "orig.ident", assay = "RNA", pt.size = 0.5)
+VlnPlot(seur, features = c("Xist", "percent_y", Ygenes), group.by = "orig.ident", assay = "RNA", pt.size = 0.1, ncol = 6)
+```
+
+```{r}
+DefaultAssay(seur) <- "RNA"
+length(WhichCells(seur, expression = Xist > 0.05 & Ddx3y < 0.1 & Uty < 0.1 & Kdm5d < 0.1))
+```
+Xist is a marker of female cells. In the dataset, there are no cells expressing Xist and expressing none of the male cells' genes. Therefore all the cells in the dataset come from one (or several) female mouse.

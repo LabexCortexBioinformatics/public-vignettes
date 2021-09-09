@@ -1,0 +1,73 @@
+---
+title: "MiQC tutorial on public data - Comparison with manual filtering"
+author: "[LabEx CORTEX Bioinformatics Platform](https://labex-cortex.universite-lyon.fr/) - Lyon 1 University - vignette produced by Emeric Texeraud"
+date: "`r Sys.Date()`"
+output: html_notebook
+---
+
+### Load packages
+```{r}
+library(Seurat, quietly = TRUE)
+library(SeuratWrappers)
+```
+
+
+```{r, warning=FALSE, include=TRUE}
+# Load  the public dataset
+seurat_matrix <- Read10X('/mnt/Data1/public_vignettes/cellranger_output/neuron_1k/outs/filtered_feature_bc_matrix')
+seur <- CreateSeuratObject(counts = seurat_matrix, project = "neuron_1k", min.cells = 3, min.features = 100)
+seur
+```
+
+```{r, fig.width=12, fig.asp=0.3, warning=FALSE, error=FALSE}
+# QC metrics calculation and visualization
+seur$percent.mt <- PercentageFeatureSet(seur, pattern = "^mt-")
+seur$percent.ribo <- PercentageFeatureSet(seur, pattern = "^Rp[sl][[:digit:]]")
+```
+
+### Detection of low quality cells with algorithm
+```{r, fig.width=10, fig.asp=0.7, warning = FALSE, message=FALSE}
+p5 = FeatureScatter(seur, feature1 = "nFeature_RNA", feature2 = "percent.mt", group.by = "orig.ident")
+seur <- RunMiQC(seur, percent.mt = "percent.mt", nFeature_RNA = "nFeature_RNA", posterior.cutoff = 0.75, 
+    model.slot = "flexmix_model")
+p6 = PlotMiQC(seur, color.by = "miQC.probability") + ggplot2::scale_color_gradient(low = "grey", high = "purple")
+p7 = PlotMiQC(seur, color.by = "miQC.keep")
+gridExtra::grid.arrange(p5, p6, p7, ncol = 2)
+```
+
+```{r}
+Idents(seur) = "miQC.keep"
+loQC_cells = WhichCells(seur, idents = "discard")
+length(loQC_cells)
+```
+197 cells out of 1280 are determined as low quality cells to be removed (15.4%).
+
+## Comparison with manual filtering
+```{r}
+# Load seurat manually filtered
+seur_filtered <- readRDS("/mnt/Data1/public_vignettes/seurat_data/neuron_1k.rds")
+loQC_in_filtered <- Cells(seur_filtered)[Cells(seur_filtered) %in% loQC_cells]
+length(loQC_in_filtered)
+```
+We have 50 cells detected as cells to remove by MiQC which are still in our manually filtered dataset.
+
+```{r, fig.width=10, fig.asp=0.7, warning = FALSE, message=FALSE}
+# Add the discard cells to metadata
+# seur_filtered@meta.data$miQC <- seur@meta.data$miQC.keep
+keep = Cells(seur_filtered)[!Cells(seur_filtered) %in% loQC_cells]
+seur_filtered <- SetIdent(seur_filtered, cells = loQC_in_filtered, value = "discard")
+seur_filtered <- SetIdent(seur_filtered, cells = keep, value = "keep")
+seur_filtered$miQC <- Idents(seur_filtered)
+# seur_filtered@meta.data$miQC <- as.data.frame(seur@meta.data$miQC.keep, row.names = Cells(seur))[Cells(seur_filtered),]
+p1 <- DimPlot(seur_filtered, order = "discard", pt.size=1) + NoAxes()
+p2 <- DimPlot(seur_filtered, group.by = "clusters", label = TRUE) + NoLegend() + NoAxes()
+p3 <- VlnPlot(seur_filtered, features = "nFeature_RNA", group.by = "miQC")
+p4 <- VlnPlot(seur_filtered, features = "percent.mt", group.by = "miQC")
+gridExtra::grid.arrange(p1, p2, p3, p4, ncol = 2)
+
+```
+Most of the cells dubbed as discarded by miQC, and still in our dataset, are cells with a high percent of mitochondrial genes. They are not concentrated in one particular cluster, removing them will not change the analysis, while increasing the quality of the results.
+
+
+
+
