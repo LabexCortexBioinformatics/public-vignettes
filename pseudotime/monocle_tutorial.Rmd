@@ -1,0 +1,141 @@
+---
+title: "monocle tutorial"
+author: "Emeric Texeraud"
+date: "29/03/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Monocle
+There are 2 means to use monocle. The first one is to use a Seurat object and use `SeuratWrappers` to turn it into a Cell dataset. The second one is to use only the count matrix and meta data, and use the monocle preprocessing method.
+
+## Monocle with Seurat
+Packages to install and use
+```{r monocle_Seurat packages, eval=FALSE}
+library(Seurat)
+library(SeuratWrappers)
+library(monocle3)
+```
+
+Seurat to cell dataset : 
+```{r monocle_Seurat to_cell_dataset, eval=FALSE}
+# load Seurat object
+pal_alra <- readRDS('Pallial_ALRA_wDCs.rds')
+
+cds <- as.cell_data_set(pal_alra)
+```
+
+learn graph :
+```{r monocle_Seurat learn_graph, eval=FALSE}
+cds <- cluster_cells(cds = cds, reduction_method = "UMAP")
+cds <- learn_graph(cds, use_partition = FALSE)
+plot_cells(cds,
+           color_cells_by = "Seurat_clusters",
+           label_groups_by_cluster=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE)
+```
+
+order cells : 
+```{r monocle_Seurat order_cells, eval=FALSE}
+cds <- order_cells(cds)
+
+plot_cells(cds,
+           color_cells_by = "pseudotime",
+           label_cell_groups=FALSE,
+           label_leaves=TRUE,
+           label_branch_points=FALSE,
+           graph_label_size=1.5, cell_size = 1)
+```
+
+from cell dataset to Seurat
+```{r monocle_Seurat to_seurat, eval=FALSE}
+pal_monocle <- as.Seurat(cds)
+```
+
+
+
+## Monocle using count matrix
+Packages to install and use
+```{r monocle_Seurat packages, eval=FALSE}
+library(Seurat) # optional, can be something else if you're using another package for your data
+library(monocle3)
+```
+
+Create cell dataset :
+```{r monocle_solo create_data, eval=FALSE}
+# load data
+pal_alra <- readRDS('Pallial_ALRA_wDCs.rds')
+
+expression_matrix <- pal_alra@assays$RNA@counts
+cell_metadata <- pal_alra@meta.data
+gene_annotation <- data.frame(gene_short_name = row.names(expression_matrix), row.names = row.names(expression_matrix))
+
+cds <- new_cell_data_set(expression_matrix,
+                         cell_metadata = cell_metadata,
+                         gene_metadata = gene_annotation)
+```
+
+preprocess the data with monocle : 
+```{r monocle_solo preprocess, eval=FALSE}
+cds <- preprocess_cds(cds, num_dim = 20, verbose = TRUE, norm_method = "log") # normalization only if raw counts
+
+cds = align_cds(cds, num_dim = 20, alignment_group = "Condition") #To remove batch effects between Nx1 and Nx2, only if potential batch effect
+```
+
+reduce dimensionality : 
+```{r monocle_solo reduce_dim, eval=FALSE}
+# Reduce dimensionality and visualize the cells
+cds <- reduce_dimension(cds, umap.min_dist = 0.3, umap.n_neighbors = 30L, verbose = TRUE, preprocess_method = "Aligned")
+plot_cells(cds, color_cells_by = "Seurat_clusters", cell_size = 1)
+```
+
+learn graph :
+```{r monocle_solo learn_graph, eval=FALSE}
+cds <- cluster_cells(cds = cds, reduction_method = "UMAP")
+cds <- learn_graph(cds, use_partition = FALSE)
+plot_cells(cds,
+           color_cells_by = "Seurat_clusters",
+           label_groups_by_cluster=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE)
+```
+
+order cells : 
+```{r monocle_Seurat order_cells, eval=FALSE}
+cds <- order_cells(cds)
+
+plot_cells(cds,
+           color_cells_by = "pseudotime",
+           label_cell_groups=FALSE,
+           label_leaves=TRUE,
+           label_branch_points=FALSE,
+           graph_label_size=1.5, cell_size = 1)
+```
+
+Then two options to extract the pseudotime. Either transform the cell dataset object in Seurat object, or just extract the pseudotime information and add it to your object.
+
+Transform cell dataset to Seurat : 
+```{r monocle_solo to_seurat, eval=FALSE}
+pal_monocle <- as.Seurat(cds)
+```
+
+Extract pseudotime: 
+```{r monocle_solo extract_pseudotime, eval=FALSE}
+traj.plot <- plot_cells(pal_cds,
+                        color_cells_by = "pseudotime",
+                        label_cell_groups=FALSE,
+                        label_leaves=TRUE,
+                        label_branch_points=FALSE,
+                        graph_label_size=1.5, cell_size = 1)
+
+pal_alra@meta.data$monocle3_pseudotime <- traj.plot[["data"]][["cell_color"]]
+```
+
+## Visualize pseudotime with Seurat
+```{r monocle visualize_pseudotime, eval=FALSE}
+FeaturePlot(sub_sub_monocle, "monocle3_pseudotime", cols = c("darkblue", "yellow"))
+```

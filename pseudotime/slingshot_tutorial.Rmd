@@ -1,0 +1,14 @@
+---
+title: "slingshot tutorial"
+author: "Emeric Texeraud"
+date: "30/03/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Slingshot
+
+Before doing a slingshot analysis, you need a umap (which you can run with package Seurat).

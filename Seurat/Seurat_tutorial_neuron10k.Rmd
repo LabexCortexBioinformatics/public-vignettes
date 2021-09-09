@@ -119,26 +119,7 @@ top20.markers.dim12
 seur <- RenameIdents(seur, "1" = "GABA_neuron_cx1", "10" = "GABA_neuron_cx2", "13" = "cr_cells", "14" = "mural_cells", "15" = "vascular_cells", "16" = "endothelial_cells", "0" = "unknown", "2" = "migrating_neurons", "3" = "bad_cells", "4" = "GLU_neuron1", "5" = "GLU_neuron2", "6" = "GLU_neuron_cx", "7" = "NSCs1", "8" = "GLU_progenitor", "9" = "NSCs2", "11" = "GLU_neuron3", "12" = "NSCs3")
 seur$clusters <- Idents(seur)
 ```
-
-
-
-### Visualization of marker expression
-```{r, fig.width=14, fig.asp=0.8}
-VlnPlot(seur, features = c("Unc5d", "Dab1", "Ube2c", "Arpp21", "Lhx6", "Eomes",
-                          "Zbtb20", "Adarb2", "Ndnf"), ncol = 3, pt.size = 0, assay = "RNA", log = TRUE)
-```
 We use the top 10 markers for each clusters to infer their identity.
-
-### Some other reference markers
-```{r, fig.width=11, fig.asp=0.4}
-VlnPlot(seur, features = c("Eomes", "Emx1", "Gsx2", "Dlx2", "Olig2", "Aqp4"), ncol = 3, pt.size = 0, assay = "RNA")
-```
-
-### Clusters annotation
-```{r}
-seur <- RenameIdents(seur, "0" = "GLU_neuron_cx", "1" = "early_neuron", "2" = "cycling_cells", "3" = "GABA_neuron_hp", "4" = "GABA_neuron_cx", "5" = "GLU_progenitor", "6" = "GABA_unknown", "7" = "GABA_cells", "8" = "cr_cells")
-seur$clusters <- Idents(seur)
-```
 
 ```{r, fig.width=5, fig.asp=.7, warning=FALSE}
 DimPlot(seur, reduction = "umap", group.by = "clusters", label = TRUE, repel = TRUE) + NoLegend() + NoAxes()
@@ -146,7 +127,7 @@ DimPlot(seur, reduction = "umap", group.by = "clusters", label = TRUE, repel = T
 
 ### Store Seurat object
 ```{r}
-saveRDS(seur, "/mnt/Data1/public_vignettes/seurat_data/neuron_1k.rds")
+saveRDS(seur, "/mnt/Data1/public_vignettes/seurat_data/neuron_10k.rds")
 ```
 
 
