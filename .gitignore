@@ -1,3 +1,7 @@
 /cellranger_output
 /dataset
 /git_tuto
+.Rproj.user
+.Rprofile
+.Rhistory
+/renv

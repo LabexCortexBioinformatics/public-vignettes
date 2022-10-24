@@ -26,7 +26,7 @@ To verify if there is a new version, and update velocyto, run `pip install -U --
 ### Main command <a name="main"></a>
 To generate spliced/unspliced counts, velocyto needs the outputs of Cell Ranger (`molecule_info.h5` file) and the genome annotation file used with Cell Ranger. The -@ option allows to specify the number of thread to use when sorting the bam file with samtools, and the --samtools-memory allows to specify the memory (in Mo) used by each thread. Take caution, the memory is the memory used by **each thread**, the amount of memory on your computer/calculator should be at least `number of thread X samtools-memory`.
 ```{bash run_velocyto, eval=FALSE}
-velocyto run10x -@ 32 --samtools-memory 2048 /mnt/Data1/public_vignettes/cellranger_output/neuron_1k/ /opt/cellranger/transcriptome/refdata-gex-mm10-2020-A/genes/genes.gtf
+velocyto run10x -@ 32 --samtools-memory 2048 /mnt/Data1/training_guillaume/cellranger_output/51_G_A /opt/cellranger/transcriptome/refdata-gex-GRCh38-2020-A/genes/genes.gtf
 ```
 Velocyto produces a new directory called velocyto within the cellranger project directory, containing a loom file.
 

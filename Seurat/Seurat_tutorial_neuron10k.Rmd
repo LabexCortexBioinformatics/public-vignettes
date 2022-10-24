@@ -22,8 +22,8 @@ library(scater)
 ```{r, warning=FALSE, include=TRUE}
 # Load  the public dataset
 seurat_matrix <- Read10X('/mnt/Data1/public_vignettes/cellranger_output/neuron_10k/outs/filtered_feature_bc_matrix')
-seur <- CreateSeuratObject(counts = seurat_matrix, project = "neuron_1k", min.cells = 3, min.features = 100)
-seur
+neur <- CreateSeuratObject(counts = seurat_matrix, project = "neuron_1k", min.cells = 3, min.features = 100)
+neur
 ```
 
 ## QC and sctransform
@@ -31,19 +31,19 @@ seur
 QC metrics
 ```{r, fig.width=12, fig.asp=0.3, warning=FALSE, error=FALSE}
 # QC metrics calculation and visualization
-seur$percent.mt <- PercentageFeatureSet(seur, pattern = "^mt-")
-seur$percent.ribo <- PercentageFeatureSet(seur, pattern = "^Rp[sl][[:digit:]]")
-VlnPlot(seur, features = c("nFeature_RNA", "nCount_RNA", "percent.mt", "percent.ribo"), ncol = 4, pt.size = 0.1)
+neur$percent.mt <- PercentageFeatureSet(seur, pattern = "^mt-")
+neur$percent.ribo <- PercentageFeatureSet(seur, pattern = "^Rp[sl][[:digit:]]")
+VlnPlot(neur, features = c("nFeature_RNA", "nCount_RNA", "percent.mt", "percent.ribo"), ncol = 4, pt.size = 0.1)
 ```
 
 Distribution of the data
 ```{r, fig.width=6, fig.asp=0.6, warning=FALSE, error=FALSE}
-FeatureScatter(seur, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+FeatureScatter(neur, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
 ```
 
 We remove cells that makes nCount_RNA plot unreadable, and cells which have too much mitochondrial genes.
 ```{r}
-seur = subset(seur, subset = (percent.mt < 20 & nCount_RNA < 50000))
+neur = subset(neur, subset = (percent.mt < 20 & nCount_RNA < 50000))
 ```
 
 ```{r, fig.width=12, fig.asp=0.3, warning=FALSE, error=FALSE}
@@ -54,7 +54,7 @@ FeatureScatter(seur, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", group.b
 ```
 We still have cells having too much counts, we will removes them, as well as the cells having too few features, which cannot be true cells.
 ```{r}
-seur = subset(seur, subset = (nFeature_RNA > 1000 & nCount_RNA < 30000) & percent.mt < 15)
+neur = subset(neur, subset = (nFeature_RNA > 1000 & nCount_RNA < 30000) & percent.mt < 15)
 ```
 
 ```{r, fig.width=6, fig.asp=.7, warning=FALSE, error=FALSE}
@@ -66,7 +66,7 @@ Now we have very few cells far from the gradient, which is a good thing, as nFea
 The latest version of sctransform also supports using glmGamPoi package which substantially improves the speed of the learning procedure. It can be invoked by specifying method="glmGamPoi".
 This single command replaces NormalizeData(), ScaleData(), and FindVariableFeatures().
 ```{r}
-seur <- SCTransform(seur, method = "glmGamPoi", verbose = FALSE)
+neur <- SCTransform(neur, method = "glmGamPoi", verbose = FALSE)
 ```
 
 ### linear dimensional reduction and the ‘dimensionality’ of the dataset

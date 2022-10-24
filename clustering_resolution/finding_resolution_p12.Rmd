@@ -1,0 +1,53 @@
+---
+title: "Setting the right clustering resolution"
+author: "[LabEx CORTEX Bioinformatics Platform - Lyon 1 University -](https://labex-cortex.universite-lyon.fr/) <br>Vignette produced by Emeric Texeraud"
+date: "`r Sys.Date()`"
+output: 
+  html_notebook:
+    toc: true
+---
+
+# Load the Seurat object
+```{r}
+suppressMessages({
+  library(Seurat)
+  library(dplyr)
+  library(cluster)
+  library(clustree)
+})
+seur <- readRDS("/mnt/Data1/public_vignettes/seurat_data/p12_new.rds")
+seur <- FindNeighbors(seur, dims = 1:20, verbose = FALSE)
+```
+
+# Find clusters on a range of resolutions
+```{r}
+res = c(0,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1,1.2,1.4,1.6,2,4)
+for (i in res) {
+  seur <- FindClusters(seur, resolution = i, verbose = F)
+}
+```
+
+# Clustree
+Clustree is a package that allows us to look at cell movement between clusters as resolution increases
+```{r, fig.width=10, fig.asp=1.1}
+clustree(seur)
+```
+
+To find the resolution we want, we must first ask ourselves one question : <br>
+How many clusters are we expecting? To answer this question, we must know how many cell types should be in the dataset, here in the dSVZ, we are expecting something between 8 and 10 cell types. We take a bit more clusters, just to be sure that all cell types will be found, without having too much clusters to care for. Here 14 or 15, maybe 16 seems to be enough, which corresponds to a resolution between 0.3 and 0.5.
+
+Another way to find the correct resolution is to plot the gene expression of one marker of each expected population, and verify at which resolution there is a cluster separated from the others for this cell type. Here we plot Lcat, marker of Astrocytes, and Ak7, marker of Ependymal cells.
+```{r, fig.width=10, fig.asp=1.1}
+genes = list(Astrocytes = "Lcat", Ependymal = "Ak7")
+for (n in names(genes)) {
+  p <- clustree(seur, node_colour = genes[[n]], node_colour_aggr = "median", return = "plot") + ggtitle(genes[[n]])
+  print(p)
+}
+
+```
+We can clearly see that Lcat positive cells separate themselves from their supercluster at dimension 0.2, but Ak7 cells separate themselves at dimension 0.3.
+
+0.3, so 14 clusters, seems to be enough to get all of our clusters expected cell types separated from each others.
+See the `Assigning cell type identity to clusters` part in vignette `Seurat_tutorial_p12.Rmd` to identify more precisely the clusters, using a resolution 0.3 for clustering.
+
+

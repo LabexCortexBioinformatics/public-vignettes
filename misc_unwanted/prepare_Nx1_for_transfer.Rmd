@@ -1,0 +1,73 @@
+---
+title: "Isolate Nx1 and prepare it for transfer"
+author: "[LabEx CORTEX Bioinformatics Platform - Lyon 1 University -](https://labex-cortex.universite-lyon.fr/) <br>Vignette produced by Emeric Texeraud"
+date: "`r Sys.Date()`"
+output: 
+  html_notebook:
+    toc: true
+---
+
+```{r, warning=FALSE, include=TRUE}
+# Load packages
+suppressMessages({
+  library(tidyverse)
+  library(Seurat)
+  library(gridExtra)
+  library(ggplot2)
+  library(viridis)
+})
+
+# Load the dataset
+seur <- readRDS("/mnt/Data1/public_vignettes/seurat_data/p12_new.rds")
+DefaultAssay(seur) <- "RNA"
+```
+
+```{r}
+seur@meta.data$Nxs <- sub("\\_[ACGT]{16}", "", colnames(seur@assays$RNA@counts))
+
+
+Nx1 <- subset(seur, subset = Nxs == "Nx1")
+```
+
+```{r}
+Nx1 <- SCTransform(Nx1, verbose = FALSE, cons)
+
+Nx1 <- RunPCA(Nx1)
+ElbowPlot(Nx1, ndims = 50)
+```
+
+```{r}
+Nx1 <- RunUMAP(Nx1, dims = 1:20)
+DimPlot(Nx1, group.by = "simple_clusters")
+```
+
+```{r}
+Nx1 <- FindNeighbors(Nx1, dims = 1:20)
+Nx1 <- FindClusters(Nx1, resolution = 0.3)
+DimPlot(Nx1)
+```
+
+
+```{r}
+saveRDS(Nx1, "/mnt/Data1/public_vignettes/seurat_data/Nx1.rds")
+```
+
+
+```{r}
+ref <- readRDS("/mnt/Data1/public_vignettes/seurat_data/p12_new.rds")
+umap.new.model <- list()
+umap.new.model$n_epochs <- 200
+umap.new.model$alpha <-1
+umap.new.model$method <- "umap"
+umap.new.model$gamma <- 1
+umap.new.model$negative_sample_rate <- 5
+umap.new.model$approx_pow <- 0
+umap.new.model$metric$cosine <- list()
+umap.new.model$embedding <- ref[["umap"]]@cell.embeddings
+ab_param <- uwot:::find_ab_params(spread = 1, min_dist = 0.3)
+umap.new.model$a <- ab_param["a"]
+umap.new.model$b <- ab_param["b"]
+umap.new.model$n_neighbors <- 30L
+ref[["umap"]]@misc$model <- umap.new.model
+```
+

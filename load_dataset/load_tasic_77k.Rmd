@@ -1,0 +1,37 @@
+---
+title: "Open 77k SMART-seq"
+author: "[LabEx CORTEX Bioinformatics Platform - Lyon 1 University -](https://labex-cortex.universite-lyon.fr/) <br>Vignette produced by Emeric Texeraud"
+date: "`r Sys.Date()`"
+output: 
+  html_notebook:
+    toc: true
+---
+
+```{r}
+library(Seurat)
+library(tidyverse)
+```
+
+```{r}
+load("/mnt/Data1/public_vignettes/dataset/Tasic_et_al/77k.ss.rda")
+```
+
+```{r}
+ss.seurat <- NormalizeData(ss.seurat) %>% FindVariableFeatures() %>% ScaleData() %>% RunPCA()
+ss.seurat <- RunUMAP(ss.seurat, dims = 1:50)
+
+DimPlot(ss.seurat, group.by = "class_label")
+saveRDS(ss.seurat, "/mnt/Data1/public_vignettes/dataset/Tasic_et_al/77k.rds")
+```
+
+```{r}
+k77 <- readRDS("/mnt/Data1/public_vignettes/dataset/Tasic_et_al/77k.rds")
+umap <- read.csv("/mnt/Data1/public_vignettes/dataset/Tasic_et_al/77k_umap.csv", row.names = 1)
+colnames(umap) <- c("UMAP_1", "UMAP_2")
+dimreduc <- CreateDimReducObject(embeddings = as.matrix(umap), assay = "RNA", key = "UMAP_")
+k77@reductions$original_umap <- dimreduc
+DimPlot(k77, reduction = "umap", group.by = "class_label")
+saveRDS(k77, "/mnt/Data1/public_vignettes/dataset/Tasic_et_al/77k.rds")
+```
+
+

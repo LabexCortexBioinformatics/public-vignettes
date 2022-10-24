@@ -1,0 +1,152 @@
+---
+title: "Seurat tutorial on p12"
+author: "[LabEx CORTEX Bioinformatics Platform](https://labex-cortex.universite-lyon.fr/) - Lyon 1 University - vignette produced by Emeric Texeraud"
+date: "`r Sys.Date()`"
+output: 
+  html_notebook:
+    toc: true
+---
+
+## Load packages
+```{r, warning=FALSE, include=TRUE}
+suppressMessages({
+  library(tidyverse)
+  library(Seurat)
+  library(patchwork)
+  library(scater)
+})
+```
+
+# Quality controls
+## Setup Seurat object
+```{r}
+Nx1_data <- Read10X("/mnt/Data1/Raineteau/2020_03_10X_dSVZ_p12_Nx_Hx/cellranger_count/Nx1/outs/filtered_feature_bc_matrix", strip.suffix = TRUE)
+Nx1 <- CreateSeuratObject(Nx1_data,  project = "clb", min.cells = 3, min.features = 100)
+```
+
+## Merge data (only if needed)
+```{r}
+Nx2_data <- Read10X("/mnt/Data1/Raineteau/2020_03_10X_dSVZ_p12_Nx_Hx/cellranger_count/Nx2/outs/filtered_feature_bc_matrix", strip.suffix = TRUE)
+Nx2 <- CreateSeuratObject(Nx2_data,  project = "clb", min.cells = 3, min.features = 100)
+```
+
+```{r}
+seur <- merge(Nx1, y=Nx2, add.cell.ids = c("NxCLB1", "NxCLB2"))
+```
+
+
+## QC
+```{r, fig.width=12, fig.asp=0.4, warning=FALSE, error=FALSE}
+# QC metrics calculation and visualization
+seur$percent.mt <- PercentageFeatureSet(seur, pattern = "^mt-")
+seur$percent.ribo <- PercentageFeatureSet(seur, pattern = "^Rp[sl][[:digit:]]")
+VlnPlot(seur, features = c("nFeature_RNA", "nCount_RNA", "percent.mt", "percent.ribo"), ncol = 4, pt.size = 0.1)
+```
+
+```{r, fig.width=6, fig.asp=0.6, warning=FALSE, error=FALSE}
+FeatureScatter(seur, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+```
+
+We want to remove the cells having a nFeature close to 0, as well as cells with a too high nFeature, which could be doublet or cells with debris. We also remove cells with a high mitochondrial percentage, assuming that these cells are mostly debris.
+```{r}
+seur = subset(seur, subset = (percent.mt < 10 & nFeature_RNA < 8000 & nFeature_RNA > 2000))
+```
+
+We then check whether there still are cells with aberrant count or ribosomal percentage.
+
+```{r, fig.width=12, fig.asp=0.3, warning=FALSE, error=FALSE}
+VlnPlot(seur, features = c("nFeature_RNA", "nCount_RNA", "percent.mt", "percent.ribo"), ncol = 4, pt.size = 0.1)
+```
+
+```{r, fig.width=6, fig.asp=0.6, warning=FALSE, error=FALSE}
+FeatureScatter(seur, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+```
+A good quality scatter plot is a scatter plot where all cells are on the gradient. Cells diverging from it are assumed to be cells of bad quality, most of the time cells with debris.
+
+# SCTransform normalization
+The latest version of sctransform also supports using glmGamPoi package which substantially improves the speed of the learning procedure. It can be invoked by specifying `method="glmGamPoi"`.
+This single command replaces NormalizeData(), ScaleData(), and FindVariableFeatures().
+
+Default normalization method is logp
+```{r}
+seur <- SCTransform(seur, verbose = FALSE)
+```
+
+# Dimension reduction and clsutering
+## PCA
+```{r, warning=FALSE, fig.width=6, fig.asp=.8}
+seur <- RunPCA(seur, verbose = FALSE)
+ElbowPlot(seur, ndims = 50)
+```
+
+The best number of dimension is in the elbow of the elbow plot. It will be the number of dimension with the least error, without over-dimensioning, which could have negative effects on the understanding of the data. But there is a need to have a minimum amount of dimension, otherwise dimension will have too much reduction, resulting in a loss of information.
+
+Here there is no sharp elbow, a correct number of dimension is between 10 and 30, we will take 20 for the rest.
+
+## Clustering
+To find the best resolution for clustering, see the `Clustering resolution` vignette.
+```{r}
+DefaultAssay(seur) <- "SCT"
+seur <- FindNeighbors(seur, dims = 1:20, verbose = FALSE)
+seur <- FindClusters(seur, resolution = 0.3, verbose = FALSE)
+print(paste("There is a total of", length(unique(seur@meta.data$seurat_clusters)), "clusters"))
+```
+
+## UMAP
+```{r, fig.width=8, fig.asp=.6}
+seur <- RunUMAP(seur, dims = 1:20, verbose = FALSE)
+DimPlot(seur, label = TRUE, pt.size = 0.8) + NoLegend() + ggtitle("dim20_res0.3")
+```
+
+# Cluster identification
+For cluster identification using a reference dataset, see `Transfer umap and celltype using Seurat transfer`.
+
+For this step, a good biological understanding of the dataset is needed. 
+
+The first possibility is to look at some markers expected in the dataset, and assign cells depending on which of these markers they express.
+```{r, fig.width=8, fig.asp=.6}
+markers = c("Foxj1", "Ak7", "Pifo", "Thbs4", "Sdc4", "Lrp4", "Egfr", "Mcm2", "Ascl1", "Dcx", "Cd24a", "Nrxn3", "Aqp4", "Agt", "Lcat", "Cldn5", "Flt1", "Pecam1", "Pdgfra", "Bmp4", "Sox10", "Cd53", "Tmem119", "C1qa")
+VlnPlot(seur, features = markers, group.by = "seurat_clusters", stack = TRUE, flip = T, assay = "SCT")
+```
+
+Clusters 0, 1 and 2 express genes Thbs4, Sdc4 and Lrp4, known to be markers of quiescent neural stem cells (qNSCs).
+Clusters 7 and 8 express genes Egfr and some markers of qNSCs, making them active neural stem cells (aNSCs).
+Clusters 11 and 12 express genes Dcx, Cd24a, Nrxn3, known to be markers of neuroblasts (NBs).
+Cluster 6 express genes Aqp4, Agt, Lcat, known to be markers of Astrocytes.
+Clusters 3, 4 and 5 express genes Mcm2, Ascl1 as well as NBs genes, making them TAPs
+Cluster 9 express genes Foxj1, Ak7, Pifo, markers of Ependymal cells.
+Cluster 10 express genes Pdgfra, Bmp4, Sox10, markers of Oligodendrocytes (OLs).
+Cluster 13 express genes Cldn5, Flt1, Pecam1, markers of Endothelial cells.
+Cluster 14 express genes Cd53, Tmem119, C1qa, markers of Microglia.
+
+If one (or more) cluster(s) seems to have several identity, it may be a good idea to rerun the Clustering step, increasing the resolution.
+
+```{r}
+seur@meta.data$clusters <- seur@meta.data$seurat_clusters
+levels(seur@meta.data$clusters) <- c("qNSC1", "qNSC2", "qNSC3", "TAP1", "TAP2", "TAP3", "Astrocytes", "aNSC1", "aNSC2", "Ependymal", "OLs", "NB1", "NB2", "Endothelial", "Microglia")
+seur@meta.data$simple_clusters <- seur@meta.data$clusters
+levels(seur@meta.data$simple_clusters) <- c("qNSCs", "qNSCs", "qNSCs", "TAPs", "TAPs", "TAPs", "Astrocytes", "aNSCs", "aNSCs", "Ependymal", "OLs", "NBs", "NBs", "Endothelial", "Microglia")
+```
+
+```{r}
+DimPlot(seur, group.by = "clusters")
+DimPlot(seur, group.by = "simple_clusters")
+```
+
+Another possibility is to look at the main markers expressed by each cluster.
+```{r}
+seur@active.ident <- seur@meta.data$seurat_clusters
+markers <- FindAllMarkers(seur, verbose = F, only.pos = TRUE)
+for (i in levels(seur@active.ident)) {
+  print(head(markers[markers$cluster == i,], 10))
+}
+```
+Combining these markers with either biological knowledge, or knowledge from databases, it is possible to infer the identity of each cluster. If one (or several) cluster(s) seems to have several identity, it may be a good idea to retry from Clustering step, increasing the resolution
+
+# Save Seurat object
+```{r}
+saveRDS(seur, file = "/mnt/Data1/public_vignettes/seurat_data/p12_new.rds")
+```
+
+
+

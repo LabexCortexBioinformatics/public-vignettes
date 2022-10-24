@@ -1,0 +1,216 @@
+---
+title: "Slingshot on Dentate gyrus dataset"
+author: "[LabEx CORTEX Bioinformatics Platform](https://labex-cortex.universite-lyon.fr/) - Lyon 1 University - vignette produced by Emeric Texeraud"
+date: "`r Sys.Date()`"
+output: html_notebook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load libraries
+```{r}
+library(slingshot)
+library(Seurat) # V4
+library(SeuratWrappers)
+library(tradeSeq)
+library(dplyr)
+library(viridis)
+library(scales)
+library(zoo)
+library(ggplot2)
+library(Matrix)
+library(pheatmap)
+```
+
+## Create Seurat object from dentate gyrus data
+```{r}
+dg_matrix <- read.csv("/mnt/Data1/public_vignettes/scvelo_data/dentate_gyrus_matrix.csv", row.names = 1)
+dg_umap <- read.csv("/mnt/Data1/public_vignettes/scvelo_data/dentate_gyrus_umap.csv", row.names = 1)
+dg_metadata <- read.csv("/mnt/Data1/public_vignettes/scvelo_data/dentate_gyrus_metadata.csv", row.names = 1)
+```
+
+As we can't just add the umap to the object from the coordinates only, we will put them in the metadata.
+```{r}
+dg <- CreateSeuratObject(dg_matrix, meta.data = dg_metadata)
+dg@meta.data <- cbind(dg@meta.data, dg_umap)
+```
+
+Compute dimension reduction
+```{r}
+dg <- NormalizeData(dg, normalization.method = "LogNormalize", verbose = FALSE)
+dg <- ScaleData(dg, verbose = FALSE)
+dg <- FindVariableFeatures(dg, selection.method = "vst", nfeatures = 2000, verbose = FALSE)
+dg <- RunPCA(dg, verbose = FALSE)
+ElbowPlot(dg)
+```
+Choose the number of dimensions to use for the pseudotime analysis. Using all PCA dimensions can lead to slingshot not working, if the last dimensions of the PCA don't bring any more information.
+
+## Pseudotime inference
+
+Slingshot is based on a minimum spanning tree on the clusters, starting from the start cluster(s) given as input. It then smooth the MST and infer pseudotime variables by fitting simultaneous principal curves
+```{r, eval=TRUE, results='hide'}
+DefaultAssay(dg) <- "RNA"
+# slingshot uses singleCellExperiment object
+dgsce <- as.SingleCellExperiment(dg)
+# run graph, you must know the starting cluster
+dgsds <- slingshot(dgsce, clusterLabels = as.character(dg$clusters), reducedDim = reducedDims(dgsce)$PCA[,1:10], start.clus = "Radial Glia-like")
+# keep only slingshot information
+dgsling <- SlingshotDataSet(dgsds)
+saveRDS(dgsling, file="/mnt/Data1/public_vignettes/pseudotime_data/dentate_gyrus_slingdataset.rds")
+# run pseudotime
+dgpt <- slingPseudotime(dgsling)
+```
+
+After running the pseudotime, we can plot the pseudotime and the graph associated with each curves.
+```{r plot slingshot GLU, eval=TRUE}
+# will show every curve and their pseudotime
+# change number of columns in final plot here
+nc <- 2
+nms <- colnames(dgpt)
+nr <- ceiling(length(nms)/nc)
+# change palette
+pall <- viridis(100, end = 0.95)
+par(mfrow = c(nr, nc))
+for (i in nms) {
+  colors <- pall[cut(dgpt[,i], breaks = 100)]
+  plot(reducedDim(dgsce), col = colors, pch = 16, cex = 1, main = i, )
+  lines(dgsling, lwd = 2, col = 'black', type = 'lineages')
+}
+```
+
+We can extract the pseudotime values and put it in the Seurat metadata. We can then either display it with a classical Seurat FeaturePlot (not shown here), or use ggplot2.
+```{r}
+dgpt <- as.data.frame(dgpt)
+
+# Add lineage1 to metadata
+name = "Lineage1"
+dg@meta.data[[paste0("pseudotime_", name)]] <- dgpt[[name]]
+
+# create dataframe with umap coordinates and pseudotime
+map_coord <- dg_umap
+map_coord$pseudo <- dg@meta.data[[paste0("pseudotime_", name)]]
+# Separate between cells having a pseudotime and cells having no pseudotime. Cells with a pseudotime will be shown on the foreground.
+map_coord_na <- subset(map_coord, (is.na(map_coord[,3])))
+map_coord_no_na <- subset(map_coord, (!is.na(map_coord[,3])))
+a <- ggplot(data = map_coord_na, aes(x = UMAP_1, y = UMAP_2, colour = pseudo)) + 
+  geom_point() +
+  geom_point(data = map_coord_no_na) + 
+  scale_colour_viridis_c(na.value = "grey90") +
+  ggtitle(name) +
+  theme(axis.line=element_blank(),
+        axis.text.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks=element_blank(),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank(),
+        panel.background=element_blank())
+
+name = "Lineage2"
+dg@meta.data[[paste0("pseudotime_", name)]] <- dgpt[[name]]
+
+map_coord <- dg_umap
+map_coord$pseudo <- dg@meta.data[[paste0("pseudotime_", name)]]
+map_coord_na <- subset(map_coord, (is.na(map_coord[,3])))
+map_coord_no_na <- subset(map_coord, (!is.na(map_coord[,3])))
+b <- ggplot(data = map_coord_na, aes(x = UMAP_1, y = UMAP_2, colour = pseudo)) + 
+  geom_point() +
+  geom_point(data = map_coord_no_na) + 
+  scale_colour_viridis_c(na.value = "grey90") +
+  ggtitle(name) +
+  theme(axis.line=element_blank(),
+        axis.text.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks=element_blank(),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank(),
+        panel.background=element_blank())
+
+# Recreate seurat DimPlot using ggplot
+map_coord <- dg_umap
+map_coord$clusters <- dg@meta.data$clusters
+c <- ggplot(data = map_coord, aes(x = UMAP_1, y = UMAP_2, colour = clusters)) + 
+  geom_point() +
+  ggtitle("Dimplot") +
+  theme(axis.line=element_blank(),
+        axis.text.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks=element_blank(),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank(),
+        panel.background=element_blank())
+c
+a + b
+```
+
+## Genes associated with pseudotime using tradeSeq
+We extract the counts matrix
+```{r}
+variableGenes <- dg@assays[["RNA"]]@meta.features[["vst.variable"]]
+variableGenes <- row.names(dg)[variableGenes]
+counts <- as.matrix(dg@assays$RNA@counts)[variableGenes,]
+```
+
+We run evaluateK function, which will give us the best K parameter for the fitGAM.
+```{r, fig.width=10, fig.asp=0.3}
+# prepare multithreading
+BPPARAM <- BiocParallel::bpparam()
+BPPARAM$workers <- 32 # use ncores
+
+# Evaluate k, run if you don't know how many knots to use in fitGAM
+icMat <- evaluateK(counts = counts, sds = dgsling, k = 3:10,
+                   nGenes = 200, verbose = F,  BPPARAM = BPPARAM)
+
+```
+We take k=6. A k too high will increase the risk of overfitting, while a k too low will decrease precision.
+
+We make the data for each gene fit a GAM. This fitting will later be used for finding genes with varying expression along pseudotime.
+```{r}
+# fitGAM and save output
+sce <- fitGAM(counts = counts, sds = dgsling, nknots = 6, verbose = FALSE, parallel=TRUE, BPPARAM = BPPARAM)
+saveRDS(sce, file="/mnt/Data1/public_vignettes/pseudotime_data/dentate_gyrus_fitGAM.rds")
+```
+
+Here we try to find the genes whose expression varies over pseudotime.
+```{r}
+assoRes <- associationTest(sce)
+orderedassoRes <- assoRes %>% arrange(desc(waldStat))
+```
+
+Here we extract pseudotime, clusters and expression matrix with only genes of interest (top X genes from the result of association test). we then order the genes following their peak expression along pseudotime (genes express at the begginnig of the pseudotime will be at the top of the heatmap, and genes expressed at the end will be at the bottom).
+```{r}
+assoRes_heat <- orderedassoRes[1:200,]
+pseudo <- as.data.frame(slingPseudotime(dgsling))
+pseudo <- pseudo[is.na(pseudo$Lineage2),]
+pseudo <- pseudo %>% arrange(Lineage1)
+
+# reorder genes for heatmap following pseudotime, and rescale counts
+counts_heat <- counts[row.names(assoRes_heat),row.names(pseudo)]
+# sliding window to order genes
+counts_heat_ordered <- counts_heat[order(apply(t(rollapply(t(counts_heat), width=5, by=1, FUN=mean)), 1, which.max)), ]
+counts_heat_scaled <- t(apply(counts_heat_ordered, 1, rescale))
+
+# get clusters
+clusters <- dg@meta.data$clusters
+clusters <- as.data.frame(clusters, row.names = Cells(dg))
+clusters <- as.data.frame(clusters[row.names(pseudo), 'clusters'], row.names=row.names(pseudo))
+names(clusters)[names(clusters) == 'clusters[row.names(pseudo), "clusters"]'] <- 'clusters'
+```
+
+Plot the Heatmap.
+```{r, fig.width=10, fig.asp=0.7}
+pheatmap(counts_heat_scaled, main = "main", 
+         cluster_rows = FALSE, cluster_cols = FALSE, 
+         show_rownames = FALSE, show_colnames = FALSE,
+         annotation_col = clusters, color = magma(100), fontsize_row = 8)
+```
+
+
+```{r}
+sessionInfo()
+```
+
+
+
+

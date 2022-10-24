@@ -67,7 +67,3 @@ gridExtra::grid.arrange(p1, p2, p3, p4, ncol = 2)
 
 ```
 Most of the cells dubbed as discarded by miQC, and still in our dataset, are cells with a high percent of mitochondrial genes. They are not concentrated in one particular cluster, removing them will not change the analysis, while increasing the quality of the results.
-
-
-
-

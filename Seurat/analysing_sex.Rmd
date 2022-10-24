@@ -1,0 +1,49 @@
+---
+title: "Analysing sex"
+author: "[LabEx CORTEX Bioinformatics Platform - Lyon 1 University -](https://labex-cortex.universite-lyon.fr/) <br>Vignette produced by Emeric Texeraud"
+date: "`r Sys.Date()`"
+output: 
+  html_notebook:
+    toc: true
+---
+## TO DO :
+D'où vient le csv avec les gènes de souris
+
+
+```{r load packages, warning=FALSE, include=TRUE}
+# Load packages
+suppressMessages({
+  library(tidyverse)
+  library(Seurat)
+  library(gridExtra)
+})
+
+seur <- readRDS("/mnt/Data1/public_vignettes/seurat_data/p12_new.rds")
+```
+
+# Sex analysis
+
+To assign cells as either male or female, we first need to find the male genes. We found the list of Y genes on [this website.]() We keep the Y genes that are in our dataset.
+```{r, warning=FALSE}
+Y = read.table("/mnt/Data1/public_vignettes/seurat_data/YGenes.csv", header = TRUE)
+Ygenes = as.character(Y$Ygenes)
+Ygenes = colnames(FetchData(seur, vars = Ygenes))
+```
+
+We then find the mean expression of all Y genes across all cells, and the expression of Xist, marker of female cells. We assign as male every cell that an expression of any of the male gene, female the cells that do not express male genes, but express Xist, and unknown the cells that express none of those genes.
+```{r, fig.width=8, fig.asp = .4}
+DefaultAssay(seur) <- "SCT"
+male_expression <- rowMeans(FetchData(seur, vars = Ygenes, slot = "data"))
+female_expression <- rowMeans(FetchData(seur, vars = "Xist", slot = "data"))
+seur@meta.data$male_expression <- male_expression
+seur@meta.data$female_expression <- female_expression
+seur@meta.data$sex <- ifelse(male_expression > 0, "male",
+                             ifelse(female_expression > 0, "female", "unknown"))
+
+FeaturePlot(seur, features = c("male_expression", "female_expression"))
+```
+```{r}
+DimPlot(seur, group.by = "sex")
+```
+
+

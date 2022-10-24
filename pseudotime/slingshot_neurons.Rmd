@@ -1,0 +1,179 @@
+---
+title: "Slingshot to Heatmap"
+author: "Emeric Texeraud"
+date: "08/04/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages, eval=TRUE, results='hide', message=FALSE}
+library(Seurat, lib.loc = "/home/labex-bioinfo/R/x86_64-pc-linux-gnu-library/diff_versions") # V4
+library(SeuratWrappers)
+library(slingshot)
+library(tradeSeq)
+library(dplyr)
+library(viridis)
+library(scales)
+library(zoo)
+library(ggplot2)
+```
+
+## GLU lineage
+
+Subset and rerun umap
+```{r prepare for slingshot GLU, eval=TRUE, message=FALSE, warning=FALSE}
+# load Seurat object
+setwd('/mnt/Data1/Raineteau/')
+pal <- readRDS('CLBNxs_Neurons_without_oligo_V2.rds')
+
+# subset Seurat object, only if needed
+sub_pal <- subset(pal, idents = c("5", "6", "3", "7"))
+DefaultAssay(sub_pal) <- "RNA"
+
+# run new UMAP on subsetted object, only if object was subsetted
+sub_pal <- RunUMAP(sub_pal, dims = 1:10)
+DimPlot(sub_pal)
+```
+
+Run slingshot pseudotime
+```{r run slingshot GLU, eval=TRUE, results='hide'}
+
+# slingshot uses singleCellExperiment object
+palsce <- as.SingleCellExperiment(sub_pal)
+# run graph
+palsds <- slingshot(palsce, clusterLabels = as.character(sub_pal$new_clusters_neurons), reducedDim = "UMAP", start.clus = "5")
+# keep only slingshot information
+palsling <- SlingshotDataSet(palsds)
+# saveRDS(palsling, file="/home/labex-bioinfo/pseudotime/data/pallial_no_alra_slingshot_qNSCs_axis_slingdataset.rds")
+# run pseudotime
+palpt <- slingPseudotime(palsling)
+```
+
+Plot all curves :
+```{r plot slingshot GLU, eval=TRUE}
+# will show every curve and their pseudotime
+# change number of columns in final plot here
+nc <- 2
+nms <- colnames(palpt)
+nr <- ceiling(length(nms)/nc)
+# change palette
+pall <- viridis(100, end = 0.95)
+par(mfrow = c(nr, nc))
+for (i in nms) {
+  colors <- pall[cut(palpt[,i], breaks = 100)]
+  plot(reducedDim(palsling), col = colors, pch = 16, cex = 1, main = i, )
+  lines(palsling, lwd = 2, col = 'black', type = 'lineages')
+}
+```
+
+
+Plot pseudotime for branch1 of GLU.
+```{r plot pseudotime GLU, eval=TRUE}
+palpt <- as.data.frame(palpt)
+
+for (name in colnames(palpt)){
+  sub_pal@meta.data[[name]] <- palpt[[name]]
+  pal@meta.data[Cells(sub_pal), paste0("pseudotime_GLU_", name)] <- sub_pal@meta.data[[name]]
+  
+  map_coord <- as.data.frame(pal@reductions$umap@cell.embeddings)
+  map_coord$pseudo <- pal@meta.data[[paste0("pseudotime_GLU_", name)]]
+  map_coord_na <- subset(map_coord, (is.na(map_coord[,3])))
+  map_coord_no_na <- subset(map_coord, (!is.na(map_coord[,3])))
+  print(ggplot(data = map_coord_na, aes(x = UMAP_1, y = UMAP_2, colour = pseudo)) + 
+    geom_point() +
+    geom_point(data = map_coord_no_na) + 
+    scale_colour_viridis_c(na.value = "grey90") +
+    ggtitle(name) +
+    theme(axis.line=element_blank(),
+          axis.text.x=element_blank(),
+          axis.text.y=element_blank(),
+          axis.ticks=element_blank(),
+          axis.title.x=element_blank(),
+          axis.title.y=element_blank(),
+          panel.background=element_blank()))
+}
+```
+
+## GABA lineage
+
+Subset and rerun umap
+```{r prepare for slingshot GABA, eval=TRUE, message=FALSE, warning=FALSE}
+# load Seurat object
+setwd('/mnt/Data1/Raineteau/')
+pal <- readRDS('CLBNxs_Neurons_without_oligo_V2.rds')
+
+# subset Seurat object, only if needed
+sub_pal <- subset(pal, idents = c("4", "2", "1", "0"))
+DefaultAssay(sub_pal) <- "RNA"
+
+# run new UMAP on subsetted object, only if object was subsetted
+sub_pal <- RunUMAP(sub_pal, dims = 1:10)
+DimPlot(sub_pal)
+```
+
+Run slingshot pseudotime
+```{r run slingshot GABA, eval=TRUE, results='hide'}
+
+# slingshot uses singleCellExperiment object
+palsce <- as.SingleCellExperiment(sub_pal)
+# run graph
+palsds <- slingshot(palsce, clusterLabels = as.character(sub_pal$new_clusters_neurons), reducedDim = "UMAP", start.clus = "4")
+# keep only slingshot information
+palsling <- SlingshotDataSet(palsds)
+# saveRDS(palsling, file="/home/labex-bioinfo/pseudotime/data/pallial_no_alra_slingshot_qNSCs_axis_slingdataset.rds")
+# run pseudotime
+palpt <- slingPseudotime(palsling)
+```
+
+Plot all curves :
+```{r plot slingshot GABA, eval=TRUE}
+# will show every curve and their pseudotime
+# change number of columns in final plot here
+nc <- 2
+nms <- colnames(palpt)
+nr <- ceiling(length(nms)/nc)
+# change palette
+pall <- viridis(100, end = 0.95)
+par(mfrow = c(nr, nc))
+for (i in nms) {
+  colors <- pall[cut(palpt[,i], breaks = 100)]
+  plot(reducedDim(palsling), col = colors, pch = 16, cex = 1, main = i, )
+  lines(palsling, lwd = 2, col = 'black', type = 'lineages')
+}
+```
+
+
+Plot pseudotime for branch1 of GLU.
+```{r plot pseudotime GABA, eval=TRUE}
+palpt <- as.data.frame(palpt)
+
+for (name in colnames(palpt)){
+  sub_pal@meta.data[[name]] <- palpt[[name]]
+  pal@meta.data[Cells(sub_pal), paste0("pseudotime_GABA_", name)] <- sub_pal@meta.data[[name]]
+  
+  map_coord <- as.data.frame(pal@reductions$umap@cell.embeddings)
+  map_coord$pseudo <- pal@meta.data[[paste0("pseudotime_GABA_", name)]]
+  map_coord_na <- subset(map_coord, (is.na(map_coord[,3])))
+  map_coord_no_na <- subset(map_coord, (!is.na(map_coord[,3])))
+  print(ggplot(data = map_coord_na, aes(x = UMAP_1, y = UMAP_2, colour = pseudo)) + 
+    geom_point() +
+    geom_point(data = map_coord_no_na) + 
+    scale_colour_viridis_c(na.value = "grey90") +
+    ggtitle(name) +
+    theme(axis.line=element_blank(),
+          axis.text.x=element_blank(),
+          axis.text.y=element_blank(),
+          axis.ticks=element_blank(),
+          axis.title.x=element_blank(),
+          axis.title.y=element_blank(),
+          panel.background=element_blank()))
+}
+```
+
+save object with new pseudotime metadata
+```{r save object, eval=TRUE}
+saveRDS(pal, file = "/mnt/Data1/Raineteau/CLBNxs_Neurons_without_oligo_V2_pseudotime.rds")
+```

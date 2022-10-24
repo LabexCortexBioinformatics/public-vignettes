@@ -1,0 +1,249 @@
+---
+title: "Seurat tutorial"
+author: "[LabEx CORTEX Bioinformatics Platform - Lyon 1 University -](https://labex-cortex.universite-lyon.fr/) <br>Vignette produced by Emeric Texeraud"
+date: "`r Sys.Date()`"
+output: 
+  html_notebook:
+    toc: true
+---
+
+# Setup the Seurat object
+```{r, warning=FALSE, include=TRUE}
+# Load packages
+suppressMessages({
+  library(tidyverse)
+  library(Seurat)
+  library(gridExtra)
+})
+
+# Load the dataset
+seur_data <- Read10X("/mnt/Data1/Raineteau/2020_03_10X_dSVZ_p12_Nx_Hx/cellranger_count/Nx1/outs/filtered_feature_bc_matrix", strip.suffix = TRUE)
+seur <- CreateSeuratObject(seur_data,  project = "clb", min.cells = 3, min.features = 100)
+```
+To combine several different datasets See the `Merge and integration` vignette
+
+```{r, include=FALSE}
+Nx2_data <- Read10X("/mnt/Data1/Raineteau/2020_03_10X_dSVZ_p12_Nx_Hx/cellranger_count/Nx2/outs/filtered_feature_bc_matrix", strip.suffix = TRUE)
+Nx2 <- CreateSeuratObject(Nx2_data,  project = "clb", min.cells = 3, min.features = 100)
+```
+
+```{r, include=FALSE}
+seur <- merge(seur, Nx2, add.cell.id = c("Nx1", "Nx2"), project = "clb")
+```
+
+
+
+# Standard pre-processing workflow
+## Quality controls
+```{r, fig.width=12, fig.asp=0.4, warning=FALSE, error=FALSE}
+# Visualize QC metrics as a violin plot
+seur$percent.mt <- PercentageFeatureSet(seur, pattern = "^mt-")
+seur$percent.ribo <- PercentageFeatureSet(seur, pattern = "^Rp[sl][[:digit:]]")
+VlnPlot(seur, features = c("nFeature_RNA", "nCount_RNA", "percent.mt", "percent.ribo"), ncol = 4, pt.size = 0.1)
+```
+
+```{r, fig.width=6, fig.asp=0.6, warning=FALSE, error=FALSE}
+# FeatureScatter is typically used to visualize genes-counts relationships
+FeatureScatter(seur, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+```
+The total number of molecules detected within a cell must correlate strongly with unique genes
+
+## Cell information
+We can determine the cell cycle status and the gender of each cell. See `Sex identification` and `Cell cyle` vignettes.
+
+## Selecting cells
+We filter cells with low nFeature_RNA (=damaged cells) and high nFeature_RNA (=doublets).
+We also filter cells with  high mitochondrial counts (=damaged cells).
+
+We can have an overview of the number of filtered out cells, replacing the values with the lower and higher thresholds wanted
+```{r}
+r_count = length(WhichCells(seur, expression = (nCount_RNA > -Inf & nCount_RNA < Inf)))
+r_mt = length(WhichCells(seur, expression = percent.mt < 10))
+r_feature = length(WhichCells(seur, expression = (nFeature_RNA > 2000 & nFeature_RNA < 8000)))
+r_total = length(WhichCells(seur, 
+                            expression = (nCount_RNA > -Inf & nCount_RNA < Inf & 
+                                            nFeature_RNA > 2000 & nFeature_RNA < 8000 & 
+                                            percent.mt < 10)))
+keep = c(r_feature, r_count, r_mt, r_total)
+remove = c(length(Cells(seur)) - r_feature, length(Cells(seur)) - r_count, length(Cells(seur)) - r_mt, length(Cells(seur)) - r_total)
+threshold = c("< 8000 and > 2000 features", "< Inf and > -Inf counts", "< 10% mitochondrial genes", "All previous thresholds applied")
+data.frame(remove, keep, threshold, row.names = c("nFeature_RNA", "nCount_RNA", "percent.mt", "Total"))
+```
+
+```{r}
+seur = subset(seur, subset = (percent.mt < 10 & nFeature_RNA < 8000 & nFeature_RNA > 2000))
+```
+
+```{r, fig.width=12, fig.asp=0.3, warning=FALSE, error=FALSE}
+# We then visualize the output and confirm the correct subsetting
+VlnPlot(seur, features = c("nFeature_RNA", "nCount_RNA", "percent.mt", "percent.ribo"), ncol = 4, pt.size = 0.1)
+```
+
+```{r, fig.width=6, fig.asp=0.6, warning=FALSE, error=FALSE}
+FeatureScatter(seur, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+```
+
+## Visualizing the most expressed genes
+```{r, fig.width=14, fig.asp=0.6}
+# We plot here the top20
+C <- seur@assays$RNA@counts
+C <- Matrix::t(Matrix::t(C)/Matrix::colSums(C)) * 100
+most_expressed <- as.matrix(apply(C, 1, median))
+most_expressed2 <- rownames(as.matrix(most_expressed[order(most_expressed[,1],decreasing=TRUE),][20:1]))
+boxplot(as.matrix(t(C[most_expressed2, ])), cex = 0.1, las = 1, xlab = "% total count per cell", 
+    col = (scales::hue_pal())(20)[20:1], horizontal = TRUE)
+```
+
+# Normalizing the data
+The next steps are to normalize the data, identify the highly variable genes and scale the data.
+This can be done by the sctransform based normalization which replaces the 3 steps.
+
+Note that this single command replaces NormalizeData(), ScaleData(), and FindVariableFeatures() from the standard workflow.
+Transformed data will be available in the SCT assay, which is set as the default after running sctransform.
+During normalization, we can also remove confounding sources of variation, for example, mitochondrial mapping percentage.
+
+sctransform also supports glmGamPoi package which substantially improves the speed of the learning procedure. It can be invoked by specifying `method="glmGamPoi"`.
+
+```{r}
+# Run sctransform
+seur <- SCTransform(seur, verbose = FALSE)
+
+# Optional
+seur <- SCTransform(seur, method = "glmGamPoi", vars.to.regress = "percent.mt", verbose = FALSE)
+```
+
+# Perform dimensionality reduction
+## Perform linear dimensional reduction
+```{r, warning=FALSE, fig.width=6, fig.asp=.8}
+# PCA
+seur <- RunPCA(seur, verbose = FALSE)
+# Determine the ‘dimensionality’ of the dataset
+ElbowPlot(seur, ndims = 50)
+```
+
+An ‘Elbow plot’ ranks principle components based on the percentage of variance explained by each one. In this example, we can observe an ‘elbow’ around PC20/30, although not sharp, suggesting that the majority of true signal is captured in the first 30 PCs.
+
+We chose 20 here but we suggest additional approaches (see the `Dimensionality` vignette) to define the right value.
+
+## Visualize genes that define the PCA
+```{r}
+# Examine and visualize PCA results a few different ways
+DimPlot(seur, reduction = "pca")
+print(seur[["pca"]], dims = 1:5, nfeatures = 5)
+VizDimLoadings(seur, dims = 1:2, reduction = "pca")
+DimHeatmap(seur, dims = 1:2, cells = 500, balanced = TRUE)
+```
+
+## Cluster the cells
+```{r}
+# the FindNeighbors() takes as input the previously defined dimensionality of the dataset
+# The FindClusters() contains a res parameter with increased values leading to a greater number of clusters
+DefaultAssay(seur) <- "SCT"
+seur <- FindNeighbors(seur, dims = 1:20, verbose = FALSE)
+seur <- FindClusters(seur, resolution = 0.3, verbose = FALSE)
+print(paste("There is a total of", length(unique(seur@meta.data$seurat_clusters)), "clusters"))
+```
+We find that setting this resolution parameter between 0.3-1.5 typically returns good results.
+We suggest to select a low resolution first to identify major cell types.
+To define the resolution in a less supervised way, see the `Clustering resolution` vignette.
+
+## Run non-linear dimensional reduction
+```{r, fig.width=8, fig.asp=.8}
+#UMAP
+seur <- RunUMAP(seur, dims = 1:20, verbose = FALSE, return.model=TRUE)
+DimPlot(seur, label = TRUE, pt.size = 0.8) + NoLegend() + ggtitle("dim20_res0.3")
+```
+As input to the UMAP we suggest using the same PCs as input to the clustering analysis.
+
+## Run several UMAP to find the best representation of data
+
+We run umaps for dimensions 15 to 25, 5 around the chosen 20 dimension. These 11 umaps are then put on a single plot and written as a png file. You can add `reduction.key = paste0("UMAP", d)` in the `RunUMAP` function, as well as adding in `DimPlot` function `reduction = paste0("UMAP", d)`. Thus every UMAP computed will be added in the Seurat object, allowing to use the UMAP of interest named `UMAP20` for dimension 20, changing the number for each dimension.
+```{r, fig.width=9, fig.asp=1.2}
+dim = 20
+l = dim-5
+h = dim+5
+p <- lapply(l:h, FUN = function(d) {
+  print(d)
+  seur <- FindNeighbors(seur, dims = 1:d, verbose = FALSE)
+  seur <- RunUMAP(seur, dims = 1:d, verbose = FALSE)
+  p1 <- DimPlot(seur, label = TRUE, pt.size = 0.5) + NoLegend() + ggtitle(paste0("dimension ", d))
+  p1
+})
+ggsave(filename = "/mnt/Data1/public_vignettes/seurat_data/plots/umap_dims_15_25.png", plot = gridExtra::arrangeGrob(grobs = p, ncol = 3), device = "png", width = 2000, height = 2400, units = "px", dpi = 200)
+```
+
+Once you chose the dimension you want for your umap, you just have to rerun it and 
+
+# Assigning cell type identity to clusters
+## Using canonical markers
+For this step, a strong biological background is required. 
+
+```{r, fig.width=7, fig.asp=.8}
+# We plot here known markers of the different cell types of the SVZ
+markers = c("Foxj1", "Ak7", "Pifo", "Thbs4", "Sdc4", "Lrp4", "Egfr", "Mcm2", "Ascl1", "Dcx", "Cd24a", "Nrxn3", "Aqp4", "Agt", "Lcat", "Cldn5", "Flt1", "Pecam1", "Pdgfra", "Bmp4", "Sox10", "Cd53", "Tmem119", "C1qa")
+VlnPlot(seur, features = markers, group.by = "seurat_clusters", stack = TRUE, flip = T, assay = "SCT") +NoLegend()
+```
+
+| Clusters | Markers                   | Identity                            |
+|:--------:|---------------------------|-------------------------------------|
+|  0, 1, 2 | Thbs4, Sdc4, Lrp4         | Quiescent neural stem cells (qNSCs) |
+|     7    | Egfr, some qNSCs markers  | Active neural stem cells (aNSCs)    |
+|  10, 11  | Dcx, Cd24a, Nrxn3         | Neuroblasts (NBs)                   |
+|     6    | Aqp4, Agt, Lcat           | Astrocytes                          |
+| 3, 4, 5  | Mcm2, Ascl1, NBs genes    | TAPs                                |
+|     8    | Foxj1, Ak7, Pifo          | Ependymal cells                     |
+|     9    | Pdgfra, Bmp4, Sox10       | Oligodendrocytes (OLs)              |
+|    12    | Cldn5, Flt1, Pecam1       | Endothelial cells                   |
+|    13    | Cd53, Tmem119, C1qa       | Microglia                           |
+
+
+If one (or more) cluster(s) seems to have several identity, it may be a good idea to rerun the Clustering step, increasing the resolution.
+
+```{r}
+# We rename the clusters with major cell type idents and write info into seurat object metadata
+seur@meta.data$simple_clusters <- seur@meta.data$seurat_clusters
+levels(seur@meta.data$simple_clusters) <- c("qNSCs", "qNSCs", "qNSCs", "TAPs", "TAPs", "TAPs", "Astrocytes", "aNSCs", "Ependymal", "OLs", "NBs", "NBs", "Endothelial", "Microglia")
+# We rename the clusters with cell subtype idents and write info into seurat object metadata
+Idents(seur) <- seur@meta.data$seurat_clusters
+seur <- RenameIdents(seur, `0` = "qNSC1", `1` = "qNSC2", `2` = "qNSC3", `3` = "TAP1", `4` = "TAP2", `5` = "TAP3", `6` = "Astrocytes", `7` = "aNSCs", `8` = "Ependymal", `9` = "OLs", `10` = "NB1", `11` = "NB2", `12` = "Endothelial", `13` = "Microglia")
+seur@meta.data$clusters = Idents(seur)
+# levels(seur@meta.data$clusters) <- c("qNSC1", "qNSC2", "qNSC3", "TAP1", "TAP2", "TAP3", "Astrocytes", "aNSCs", "Ependymal", "OLs", "NB1", "NB2", "Endothelial", "Microglia")
+```
+
+```{r, fig.width=10, fig.asp = .5}
+p1 <- DimPlot(seur, group.by = "clusters", label = T) + NoLegend()
+p2 <- DimPlot(seur, group.by = "simple_clusters", label = T) + NoLegend()
+gridExtra::grid.arrange(p1, p2, ncol=2)
+```
+
+## Using differentially expressed genes
+```{r}
+Idents(seur) <- "seurat_clusters"
+markers <- FindAllMarkers(seur, verbose = F, only.pos = TRUE)
+markers %>% group_by(cluster) %>%  slice_max(n = 5, order_by = avg_log2FC)
+```
+Combining these markers with either biological knowledge, or knowledge from databases, it is possible to infer the identity of each cluster. If one (or several) cluster(s) seems to have several identity, it may be a good idea to retry from Clustering step, increasing the resolution
+
+## Using databases
+For cluster identification using a reference dataset, see `Transfer umap and celltype using Seurat transfer`.
+
+# Visualization
+We already saw the gene representation as Violin plot, but there also exists other representation for gene expression, such as the Feature plot, which plots the gene expression on the chosen dimension reduction (default is on umap). Here an example using gene Thbs4, a marker of qNSCs.
+```{r}
+VlnPlot(seur, features = "Thbs4", sort = TRUE, group.by = "simple_clusters")
+FeaturePlot(seur, features = "Thbs4")
+```
+
+You can also plot any non discrete column from the metadata on the Feature plot. Here an example using the percent.mt metadata.
+```{r}
+FeaturePlot(seur, features = "percent.mt")
+```
+
+# Save/Load Seurat object
+```{r}
+# Save object 
+saveRDS(seur, file = "/mnt/Data1/public_vignettes/seurat_data/p12_new.rds")
+# Read object
+seur <- readRDS("/mnt/Data1/public_vignettes/seurat_data/p12_new.rds")
+```
+

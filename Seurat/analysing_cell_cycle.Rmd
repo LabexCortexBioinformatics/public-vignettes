@@ -1,0 +1,43 @@
+---
+title: "Analysing cell cycle"
+author: "[LabEx CORTEX Bioinformatics Platform - Lyon 1 University -](https://labex-cortex.universite-lyon.fr/) <br>Vignette produced by Emeric Texeraud"
+date: "`r Sys.Date()`"
+output: 
+  html_notebook:
+    toc: true
+---
+
+```{r load packages, warning=FALSE, include=TRUE}
+# Load packages
+suppressMessages({
+  library(tidyverse)
+  library(Seurat)
+  library(gridExtra)
+})
+
+seur <- readRDS("/mnt/Data1/public_vignettes/seurat_data/p12_new.rds")
+```
+
+# Cell cycle analysis
+
+To find our cycling cells, we first need to get the genes involved in the G2M and S phases of the cell cycle. For that, we will get the human cycling genes from seurat, and transform them to mouse format (uppercase first letter).
+```{r cell cycle genes}
+s.genes <- str_to_title(cc.genes.updated.2019$s.genes)
+g2m.genes <- str_to_title(cc.genes.updated.2019$g2m.genes)
+```
+
+We then use the `CellcycleScoring` function from Seurat to score the S and G2M phases, and assign them to cells. What it does is scoring the S phase using S genes, then scoring the G2M phase using G2M genes. Finally, it will assign the cells to S phase if they have a high score for S genes, or G2M for a high G2M score.
+```{r cell cycle scoring}
+seur <- CellCycleScoring(seur, s.features = s.genes, g2m.features = g2m.genes, set.ident = FALSE)
+```
+
+We can then see which cells have a high S score or high G2M score.
+```{r, fig.width=8, fig.asp=0.4}
+FeaturePlot(seur, features = c("S.Score", "G2M.Score"))
+```
+We can also see which cells are assigned S or G2M score.
+```{r}
+DimPlot(seur, group.by = "Phase")
+```
+
+

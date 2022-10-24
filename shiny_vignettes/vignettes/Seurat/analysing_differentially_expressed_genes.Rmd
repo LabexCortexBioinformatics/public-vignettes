@@ -1,0 +1,86 @@
+---
+title: "Analysing differentially expressed genes"
+author: "[LabEx CORTEX Bioinformatics Platform - Lyon 1 University -](https://labex-cortex.universite-lyon.fr/) <br>Vignette produced by Emeric Texeraud"
+date: "`r Sys.Date()`"
+output: 
+  html_notebook:
+    toc: true
+---
+
+# Load the Seurat object
+```{r, warning=FALSE, include=TRUE}
+# Load packages
+suppressMessages({
+  library(tidyverse)
+  library(Seurat)
+  library(gridExtra)
+  library(ggplot2)
+  library(viridis)
+  library(ggrepel)
+})
+
+# Load the dataset
+seur <- readRDS("/mnt/Data1/public_vignettes/seurat_data/p12_new.rds")
+DefaultAssay(seur) <- "RNA"
+```
+
+# Find DEG (differentially expressed genes) between two clusters
+
+To find the genes differentially expressed between two conditions, we use the Seurat function `FindMarkers`. This function requires us to normalize the data beforehand, as it can't run on a SCT assay. `ident.1` is the cluster which will have positive fold change, and `ident.2` will have negative fold change. We can limit the number of markers (and the time it takes to compute them) with the parameter `logfc.threshold`. The parameter `only.pos` allows us to get only the markers upregulated in the first ident.
+```{r}
+seur <- NormalizeData(seur, verbose = F)
+
+markers <- FindMarkers(seur, ident.1 = "qNSCs", ident.2 = "TAPs", group.by = "simple_clusters", verbose = FALSE, logfc.threshold = .25, slot = "data")
+write.csv(markers, "/mnt/Data1/public_vignettes/seurat_data/p12_markers.csv") # save markers as csv
+```
+
+```{r, include = FALSE}
+markers <- read.csv("/mnt/Data1/public_vignettes/seurat_data/p12_markers.csv", header = T, row.names = 1)
+```
+
+
+We now have 4926 markers. Out of these, some are unwanted markers, that we can discard using better thresholds, for example keeping the markers with a p-value lower than 0.05. We will use dplyr to filter the markers dataframes, and then separate the markers in two : the upregulated in identity 1, and the upregulated in identity 2.
+```{r}
+markers <- markers %>% filter(p_val_adj < 0.05)
+markers1 <- markers %>% filter(avg_log2FC > 1) # up in ident 1
+markers2 <- markers %>% filter(avg_log2FC < -1) # up in ident 2
+```
+
+We can plot our markers with different type of plots listed below.
+```{r}
+genes_to_highlight = c(row.names(markers1[markers1$avg_log2FC > 3,]), row.names(markers2[markers2$avg_log2FC < -3,])) # select genes to name in plot
+test = AverageExpression(seur, assays = "RNA", features = row.names(seur), group.by = "simple_clusters", slot = "data")$RNA # get expression data of all genes
+plot_data <- as.data.frame(log1p(test[,c("qNSCs", "TAPs")])) 
+plot_data <- plot_data %>% rename(y = qNSCs, x = TAPs)
+plot_data$col = "same" # Set in which ident the gene is up
+plot_data[row.names(markers1), "col"] = "upregulated qNSCs"
+plot_data[row.names(markers2), "col"] = "upregulated TAPs"
+plot_data$names = ifelse(row.names(plot_data) %in% genes_to_highlight, row.names(plot_data), '') # add genes to name in the plotting data
+plot_data$pval <- 1
+plot_data[row.names(markers), "pval"] <- markers$p_val_adj # Set pvalue for each genes
+plot_data$fold_change <- 0
+plot_data[row.names(markers), "fold_change"] <- markers$avg_log2FC # set fold change for each genes
+plot_data$abs_fold_change <- abs(plot_data$fold_change)
+
+colour_map = c("upregulated qNSCs" = "red", "upregulated TAPs" = "blue", "same" = "grey70") # Set the colour map (colour for each group)
+ggplot(plot_data, aes(x = x, y = y, colour = col)) + # Plot the genes as points with X being the expression of the gene in identity 2, Y the expression of the gene in identity 1. Replace X with fold_change, Y with pval and uncomment scale_y_reverse() to get a volcano plot 
+  geom_point(size = 1) + 
+  scale_colour_manual(values = colour_map) + 
+  # scale_y_reverse() +
+  geom_text_repel(aes(label=names), segment.color = 'grey50', max.overlaps = 50, min.segment.length = 0.2, colour = "black") +
+  theme_bw() +
+  ggtitle("qNSCs vs TAPs markers") +
+  labs(x = "Gene expression in qNSCs", y = "Gene expression in TAPs")
+
+ggplot(plot_data, aes(x, y, colour = pval)) + # Plot the same genes as the previous plot, but colour them as their p-value
+  geom_point(size = 1) +
+  scale_colour_gradientn(colours = viridis(100, option = "B", end = 0.99, direction = -1), trans = scales::pseudo_log_trans(base = 2, sigma = 1e-200), breaks = c(0, 1e-150, 1e-100, 1e-50, 1)) +
+  theme_bw()
+
+ggplot(plot_data, aes(x, y, colour = abs_fold_change)) + # Plot the same genes as the previous plot, but colour them as their fold change
+  geom_point(size = 1) +
+  scale_colour_gradientn(colours = viridis(n = 10, option = "B", end = 0.99, direction = 1)) +
+  theme_bw()
+```
+
+

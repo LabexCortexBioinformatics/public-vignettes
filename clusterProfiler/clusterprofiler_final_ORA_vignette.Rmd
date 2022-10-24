@@ -1,0 +1,355 @@
+---
+title: "ClusterProfiler ORA vignette"
+author: "[LabEx CORTEX Bioinformatics Platform](https://labex-cortex.universite-lyon.fr/) - Lyon 1 University - vignette produced by Emeric Texeraud"
+date: "`r Sys.Date()`"
+output: html_notebook
+---
+
+
+Load libraries
+```{r}
+suppressMessages({
+  library(tidyverse)
+  library(Seurat) # Seurat V4 Required for this vignette because of avg_log2FC
+  library(enrichplot)
+  library(clusterProfiler)
+  library(DOSE)
+  library(pheatmap)
+  require(org.Mm.eg.db)
+})
+```
+
+Set organism 
+```{r}
+organism = org.Mm.eg.db
+```
+
+```{r}
+clb <- readRDS("/mnt/Data2/Raineteau/MarcyG_Raineteau_lab_GEO_submission_10132021/processed_data_files/dSVZ_P12_1/P12_dSVZ_Seq.rds")
+Idents(clb) = "Simplified_clusters"
+clb_markers_ORA = FindMarkers(clb, ident.1 = "qNSCs", ident.2 = "TAPs", logfc.threshold = 0.7, assay = "RNA",verbose = FALSE)
+
+dataORA = clb_markers_ORA
+dataORA <- dataORA %>% rownames_to_column(var = "X") #To create a column gene and remove rownames
+```
+
+Filter markers of qNSCs and TAPs
+```{r}
+dataORA_TAPs <- dataORA[dataORA$avg_log2FC < 0 & dataORA$p_val < 0.05,]
+```
+
+# ORA qNSCs (ORA on upregulated markers)
+```{r}
+dataORA_qNSCs <- dataORA[dataORA$avg_log2FC > 0 & dataORA$p_val < 0.05,]
+namesqNSCs <- as.character(dataORA_qNSCs$X)
+egoqNSCs = bitr(namesqNSCs, fromType <- "SYMBOL", toType <- "ENTREZID", OrgDb <- "org.Mm.eg.db") #Biological Id TRanslator
+geneListORA_qNSCs <- egoqNSCs$ENTREZID
+```
+
+## GO BP analysis
+```{r}
+egoqNSCs <- enrichGO(gene          = geneListORA_qNSCs,
+                  universe      = names(geneListORA_qNSCs),
+                  OrgDb         = org.Mm.eg.db,
+                  ont           = "BP",
+                  pAdjustMethod = "BH",
+                  pvalueCutoff  = 0.01,
+                  qvalueCutoff  = 0.05,
+                  readable      = TRUE)
+write.csv(egoqNSCs, row.names = TRUE, file = "/home/labex-bioinfo/public_vignettes/clusterProfiler/data/ORA_qNSCs.csv")
+
+egoqNSCs2 <- simplify(egoqNSCs, measure="Wang", semData=NULL) # The simplify method allows to remove redundant terms based on GOSemSim (select one representative term from redundant ones based on higher p.adjust, which have similarity higher than "cutoff)
+write.csv(egoqNSCs2, row.names = T, file = "/home/labex-bioinfo/public_vignettes/clusterProfiler/data/ORA_qNSCs_simplify.csv")
+```
+
+```{r, fig.asp=1.2}
+p1 <- dotplot(egoqNSCs, x= "GeneRatio", orderBy = "GeneRatio", showCategory=25)
+
+p2 <- dotplot(egoqNSCs2, x= "GeneRatio", orderBy = "GeneRatio", showCategory=25)
+
+ggsave("/home/labex-bioinfo/public_vignettes/clusterProfiler/data/LPS_ORA_qNSCs.png", p1, device = "png", width = 1000, height = 500, units = "px", dpi = 300)
+ggsave("/home/labex-bioinfo/public_vignettes/clusterProfiler/data/LPS_ORA_qNSCs_simplify.png", p2, device = "png", width = 1000, height = 500, units = "px", dpi = 300)
+
+p1
+p2
+```
+
+## Heatmap representation of BP analysis
+```{r}
+df1 <- read.csv('/home/labex-bioinfo/public_vignettes/clusterProfiler/data/ORA_qNSCs.csv', row.names = 3)
+
+#Option1 - Not mandatory
+#Keep specific terms
+interest = c("vesicle", "cycle", "synapse")
+position = unique(grep(paste(interest,collapse="|"), row.names(df1)))
+df1 = df1[position, ]
+
+#Option2 - Not mandatory
+#Remove specific terms
+toremove = c("muscle")
+position = unique(grep(paste(toremove,collapse="|"), row.names(df1), invert = TRUE))
+df1 = df1[position, ]
+```
+
+
+```{r}
+genes = lapply(df1$geneID, FUN = function(x) strsplit(x, "/")[[1]])
+uniques = unique(unlist(as.list(genes), recursive = FALSE)) # find every genes in the analysis
+names(genes) = row.names(df1) # name each list of gene with GO associated
+
+data <- data.frame(matrix(NA,
+                          nrow = length(uniques),
+                          ncol = nrow(df1)), row.names = uniques)
+colnames(data) <- row.names(df1) # create empty dataframe
+
+for (i in row.names(df1)){
+  data[i] = as.integer(as.logical(uniques %in% genes[i][[1]])) # fill dataframe with 0 and 1 whether the gene is associated with go term or not
+}
+
+data_ordered1 <- data[order(apply(data, 1, FUN=sum), decreasing = TRUE), ] # reorder genes by sum, comment if clustering should be done
+
+pheatmap(data_ordered1, color = c("#f2f2f2", "#ff5640"), # first color is for 0 and second for 1, here a very light gray and soft red
+         cluster_rows = FALSE, treeheight_row = 20, treeheight_col = 20, 
+         main = "Genes associated with GO terms", angle_col = 45, 
+         border_color = "white", legend = FALSE, filename = "/home/labex-bioinfo/public_vignettes/clusterProfiler/data/ORA_BP_qNSCs_Heatmap.png", silent = TRUE)
+```
+
+## KEGG analysis
+```{r}
+search_kegg_organism('mmu', by='kegg_code')
+kkqNSCs <- enrichKEGG(gene         = geneListORA_qNSCs,
+                   organism     = "mmu",
+                   pvalueCutoff = 0.01,
+                   pAdjustMethod = "BH",
+                   minGSSize = 5,
+                   maxGSSize = 500,
+                   use_internal_data = FALSE)
+head(kkqNSCs)
+write.csv(kkqNSCs, row.names = T, file = "/home/labex-bioinfo/public_vignettes/clusterProfiler/data/KEGGAnalysis_LPS_ORA_qNSCs.csv")
+```
+
+```{r}
+p <- dotplot(kkqNSCs, x= "GeneRatio", orderBy = "GeneRatio", showCategory=25)
+
+ggsave("/home/labex-bioinfo/public_vignettes/clusterProfiler/data/KEGGAnalysis_LPS_ORA_qNSCs.png", p, device = "png", width = 600, height = 500, units = "px", dpi = 300)
+p
+```
+
+## Heatmap representation of KEGG analysis
+```{r}
+df3 <- read.csv('/home/labex-bioinfo/public_vignettes/clusterProfiler/data/KEGGAnalysis_LPS_ORA_qNSCs.csv', row.names = 3) # number is the column you want to use as names for heatmap. Default is 3 as it is the full name of the GO term
+genes = lapply(df3$geneID, FUN = function(x) strsplit(x, "/")[[1]])
+uniques = unique(unlist(as.list(genes), recursive = FALSE)) # find every genes in the analysis
+
+#Convert uniques (entrezID) to gene symbol
+uniques = bitr(uniques, fromType <- "ENTREZID", toType <- "SYMBOL", OrgDb <- "org.Mm.eg.db") #Biological Id TRanslator
+head(uniques)
+uniques <- uniques$SYMBOL
+
+names(genes) = row.names(df3) # name each list of gene with GO associated
+
+# genes <- apply(genes, FUN = function(x) bitr(x, fromType <- "ENTREZID", toType <- "SYMBOL", OrgDb <- "org.Mm.eg.db")$SYMBOL)
+
+for (i in rownames(df3)) {
+  genes[[i]] = bitr(genes[[i]], fromType <- "ENTREZID", toType <- "SYMBOL", OrgDb <- "org.Mm.eg.db")
+  genes[[i]] <- genes[[i]]$SYMBOL
+}
+
+# #Option1 - Not mandatory
+# #Keep specific terms
+# interest = c("vesicle", "recycling")
+# position = unique(grep(paste(interest,collapse="|"), row.names(df3)))
+# df3 = df3[position, ]
+# 
+# #Option2 - Not mandatory
+# #Remove specific terms
+# toremove = c("muscle")
+# position = unique(grep(paste(toremove,collapse="|"), row.names(df3)))
+# df3 = df3[-position, ]
+```
+
+```{r}
+data <- data.frame(matrix(NA,
+                          nrow = length(uniques),
+                          ncol = nrow(df3)), row.names = uniques)
+colnames(data) <- row.names(df3) # create empty dataframe
+
+for (i in row.names(df3)){
+  data[i] = as.integer(as.logical(uniques %in% genes[i][[1]])) # fill dataframe with 0 and 1 whether the gene is associated with go term or not
+}
+
+data_ordered3 <- data[order(apply(data, 1, FUN=sum), decreasing = TRUE), ] # reorder genes by sum, comment if clustering should be done
+
+pheatmap(data_ordered3, color = c("#f2f2f2", "#ff5640"), # first color is for 0 and second for 1, here a very light gray and soft red
+         cluster_rows = FALSE, treeheight_row = 20, treeheight_col = 20, 
+         main = "Genes associated with GO terms", angle_col = 45, 
+         border_color = "white", legend = FALSE, filename = "/home/labex-bioinfo/public_vignettes/clusterProfiler/data/ORA_KEGG_qNSCs_Heatmap.jpg", silent = TRUE)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ORA TAPs (ORA on downregulated markers)
+```{r}
+namesTAPs <- as.character(dataORA_TAPs$X)
+egoTAPs = bitr(namesTAPs, fromType <- "SYMBOL", toType <- "ENTREZID", OrgDb <- "org.Mm.eg.db") #Biological Id TRanslator
+geneListORA_TAPs <- egoTAPs$ENTREZID
+```
+
+## GO BP analysis 
+```{r}
+egoTAPs <- enrichGO(gene          = geneListORA_TAPs,
+                    universe      = names(geneListORA_TAPs),
+                    OrgDb         = org.Mm.eg.db,
+                    ont           = "BP",
+                    pAdjustMethod = "BH",
+                    pvalueCutoff  = 0.01,
+                    qvalueCutoff  = 0.05,
+                    readable      = TRUE)
+head(summary(egoTAPs))
+write.csv(egoTAPs, row.names = T, file = "/home/labex-bioinfo/public_vignettes/clusterProfiler/data/ORA_TAPs.csv")
+
+egoTAPs2 <- simplify(egoTAPs, measure="Wang", semData=NULL) # The simplify method allows to remove redundant terms based on GOSemSim (select one representative term from redundant ones based on higher p.adjust, which ahve similarity higher than "cutoff)
+write.csv(egoTAPs2, row.names = T, file = "/home/labex-bioinfo/public_vignettes/clusterProfiler/data/ORA_TAPs_simplify.csv")
+```
+
+```{r, fig.asp=1.2}
+p1 <- dotplot(egoTAPs, x= "GeneRatio", orderBy = "GeneRatio", showCategory=25)
+
+p2 <- dotplot(egoTAPs2, x= "GeneRatio", orderBy = "GeneRatio", showCategory=25)
+
+ggsave("/home/labex-bioinfo/public_vignettes/clusterProfiler/data/LPS_ORA_TAPs.png", p1, device = "png", width = 1000, height = 500, units = "px", dpi = 300)
+ggsave("/home/labex-bioinfo/public_vignettes/clusterProfiler/data/LPS_ORA_TAPs_simplify.png", p2, device = "png", width = 1000, height = 500, units = "px", dpi = 300)
+
+p1
+p2
+```
+
+## Heatmap representation of BP analysis
+```{r}
+df2 <- read.csv('/home/labex-bioinfo/public_vignettes/clusterProfiler/data/ORA_TAPs.csv', row.names = 3) # number is the column you want to use as names for heatmap. Default is 3 as it is the full name of the GO term
+
+#Option1 - Not mandatory
+#Keep specific terms
+interest = c("vesicle", "cycle", "synapse")
+position = unique(grep(paste(interest,collapse="|"), row.names(df2)))
+df2 = df2[position, ]
+
+#Option2 - Not mandatory
+#Remove specific terms
+toremove = c("muscle")
+position = unique(grep(paste(toremove,collapse="|"), row.names(df2), invert = TRUE))
+df2 = df2[position, ]
+```
+
+```{r}
+genes = lapply(df2$geneID, FUN = function(x) strsplit(x, "/")[[1]])
+uniques = unique(unlist(as.list(genes), recursive = FALSE)) # find every genes in the analysis
+names(genes) = row.names(df2) # name each list of gene with GO associated
+
+data <- data.frame(matrix(NA,
+                          nrow = length(uniques),
+                          ncol = nrow(df2)), row.names = uniques)
+colnames(data) <- row.names(df2) # create empty dataframe
+
+for (i in row.names(df2)){
+  data[i] = as.integer(as.logical(uniques %in% genes[i][[1]])) # fill dataframe with 0 and 1 whether the gene is associated with go term or not
+}
+
+data_ordered2 <- data[order(apply(data, 1, FUN=sum), decreasing = TRUE), ] # reorder genes by sum, comment if clustering should be done
+
+pheatmap(data_ordered2, color = c("#f2f2f2", "#ff5640"), # first color is for 0 and second for 1, here a very light gray and soft red
+         cluster_rows = FALSE, treeheight_row = 20, treeheight_col = 20, 
+         main = "Genes associated with GO terms", angle_col = 45, 
+         border_color = "white", legend = FALSE, filename = "/home/labex-bioinfo/public_vignettes/clusterProfiler/data/ORA_BP_TAPs_Heatmap.png", silent = TRUE)
+```
+
+## KEGG analysis
+```{r}
+search_kegg_organism('mmu', by='kegg_code')
+kkTAPs <- enrichKEGG(gene         = geneListORA_TAPs,
+                     organism     = "mmu",
+                     pvalueCutoff = 0.01,
+                     pAdjustMethod = "BH",
+                     minGSSize = 5,
+                     maxGSSize = 500,
+                     use_internal_data = FALSE)
+head(kkTAPs)
+write.csv(kkTAPs, row.names = T, file = "/home/labex-bioinfo/public_vignettes/clusterProfiler/data/KEGGAnalysis_LPS_ORA_TAPs.csv")
+```
+
+```{r, fig.asp=1.2}
+p <- dotplot(kkTAPs, x= "GeneRatio", orderBy = "GeneRatio", showCategory=25)
+
+ggsave("/home/labex-bioinfo/public_vignettes/clusterProfiler/data/KEGGAnalysis_LPS_ORA_TAPs.png", p, device = "png", width = 600, height = 500, units = "px", dpi = 300)
+p
+```
+
+## Heatmap representation of KEGG analysis
+```{r}
+df4 <- read.csv('/home/labex-bioinfo/public_vignettes/clusterProfiler/data/KEGGAnalysis_LPS_ORA_TAPs.csv', row.names = 3) # number is the column you want to use as names for heatmap. Default is 3 as it is the full name of the GO term
+genes = lapply(df4$geneID, FUN = function(x) strsplit(x, "/")[[1]])
+uniques = unique(unlist(as.list(genes), recursive = FALSE)) # find every genes in the analysis
+
+#Convert uniques (entrezID) to gene symbol
+uniques = bitr(uniques, fromType <- "ENTREZID", toType <- "SYMBOL", OrgDb <- "org.Mm.eg.db") #Biological Id TRanslator
+head(uniques)
+uniques <- uniques$SYMBOL
+
+names(genes) = row.names(df4) # name each list of gene with GO associated
+
+# genes <- apply(genes, FUN = function(x) bitr(x, fromType <- "ENTREZID", toType <- "SYMBOL", OrgDb <- "org.Mm.eg.db")$SYMBOL)
+
+for (i in rownames(df4)) {
+  genes[[i]] = bitr(genes[[i]], fromType <- "ENTREZID", toType <- "SYMBOL", OrgDb <- "org.Mm.eg.db")
+  genes[[i]] <- genes[[i]]$SYMBOL
+}
+
+# #Option1 - Not mandatory
+# #Keep specific terms
+# interest = c("vesicle", "recycling")
+# position = unique(grep(paste(interest,collapse="|"), row.names(df4)))
+# df4 = df4[position, ]
+# 
+# #Option2 - Not mandatory
+# #Remove specific terms
+# toremove = c("vesicle", "recycling")
+# position = unique(grep(paste(toremove,collapse="|"), row.names(df4)))
+# df4 = df4[-position, ]
+```
+
+```{r}
+data <- data.frame(matrix(NA,
+                          nrow = length(uniques),
+                          ncol = nrow(df4)), row.names = uniques)
+colnames(data) <- row.names(df4) # create empty dataframe
+
+for (i in row.names(df4)){
+  data[i] = as.integer(as.logical(uniques %in% genes[i][[1]])) # fill dataframe with 0 and 1 whether the gene is associated with go term or not
+}
+
+data_ordered4 <- data[order(apply(data, 1, FUN=sum), decreasing = TRUE), ] # reorder genes by sum, comment if clustering should be done
+
+pheatmap(data_ordered4, color = c("#f2f2f2", "#ff5640"), # first color is for 0 and second for 1, here a very light gray and soft red
+         cluster_rows = FALSE, treeheight_row = 20, treeheight_col = 20, 
+         main = "Genes associated with GO terms", angle_col = 45, 
+         border_color = "white", legend = FALSE, filename = "/home/labex-bioinfo/public_vignettes/clusterProfiler/data/ORA_KEGG_TAPs_Heatmap.jpg", silent = TRUE)
+```
+
+
+
+
+
+

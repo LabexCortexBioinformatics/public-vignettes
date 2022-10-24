@@ -1,0 +1,151 @@
+---
+title: "Analyzing pseudotime"
+author: "[LabEx CORTEX Bioinformatics Platform - Lyon 1 University -](https://labex-cortex.universite-lyon.fr/) <br>Vignette produced by Emeric Texeraud"
+date: "`r Sys.Date()`"
+output: 
+  html_notebook:
+    toc: true
+---
+
+# Load the Seurat object
+```{r}
+suppressMessages({
+  library(tidyverse)
+  library(Seurat)
+  library(slingshot)
+  library(SeuratWrappers)
+  library(viridis)
+  library(ggplot2)
+  library(Matrix)
+})
+
+# Load the dataset
+seur <- readRDS("/mnt/Data1/public_vignettes/seurat_data/p12_new.rds")
+DefaultAssay(seur) <- "RNA"
+```
+
+# Prepare for slingshot
+From the velocity analysis, we could see 3 main directions, all beginning in the TAP2 cluster. Here we will focus on the TAP2 -> qNSCs direction. The first step is therefore to subset our object.
+
+```{r}
+TAP2_qNSCs <- subset(seur, subset = clusters %in% c("TAP2", "qNSC1", "qNSC2", "qNSC3", "Ependymal", "aNSCs"))
+```
+
+Now that we have our subsetted object, we can prepare it for the pseudotime analysis. We first need to Normalize the RNA assay (which is done if we already analysed the DEG). Finally, we will need to transform our object to a `SingleCellExperiment` object, which is the type of data used by slingshot. Luckily for us, SeuratWrappers has a function to that for us.
+
+```{r}
+DefaultAssay(TAP2_qNSCs) <- "RNA"
+TAP2_qNSCs <- NormalizeData(TAP2_qNSCs, verbose = FALSE)
+
+# slingshot uses singleCellExperiment object
+sce <- as.SingleCellExperiment(TAP2_qNSCs)
+reducedDims(sce)$PCA <- TAP2_qNSCs@reductions$pca@cell.embeddings
+```
+
+# Pseudotime inference
+
+Slingshot is based on a minimum spanning tree on the clusters, starting from the start cluster(s) given as input. It then smooth the MST and infer pseudotime variables by fitting simultaneous principal curves. So we first need to compute a minimum spanning tree, on which the pseudotime will then be computed. While analyzing the data, we concluded that the best number of PCA dimension was 20, so that is the number of PCA dimension we will use for the MST computation.
+```{r, eval=TRUE, results='hide'}
+# run graph, we must know the starting cluster
+sds <- slingshot(sce, clusterLabels = as.character(TAP2_qNSCs$clusters), reducedDim = reducedDims(sce)$PCA[,1:20], start.clus = "TAP2")
+# keep only slingshot information
+sling <- SlingshotDataSet(sds)
+saveRDS(sling, file="/mnt/Data1/public_vignettes/pseudotime_data/TAP2_qNSCs_slingdataset.rds") # save slingshot object
+# run pseudotime
+pt <- slingPseudotime(sling)
+```
+
+After running the pseudotime, we can plot the pseudotime and the graph associated with each curves on the PCA (the dimension reduction used for the graph computation).
+```{r plot slingshot GLU, eval=TRUE}
+# will show every curve and their pseudotime
+# change number of columns in final plot here
+nc <- 2
+nms <- colnames(pt)
+nr <- ceiling(length(nms)/nc)
+# change palette
+pall <- viridis(100, end = 0.95)
+par(mfrow = c(nr, nc))
+for (i in nms) {
+  colors <- pall[cut(pt[,i], breaks = 100)]
+  plot(reducedDim(sce), col = colors, pch = 16, cex = 1, main = i, )
+  lines(sling, lwd = 2, col = 'black', type = 'lineages')
+}
+```
+Slingshot finds 2 graphs. We were expecting only one, so we will see what are the differences between the two graphs, by analysing which cells are not in the first or the second.
+
+```{r}
+pt <- as.data.frame(pt) # pseudotime as data frame
+not_in_graph1 <- is.na(pt$Lineage1)
+not_in_graph2 <- is.na(pt$Lineage2)
+
+summary(TAP2_qNSCs$clusters[not_in_graph1])
+summary(TAP2_qNSCs$clusters[not_in_graph2])
+```
+
+The first graph doesn't include the cells from cluster qNSC2, and second graph doesn't include the cells from clusters qNSC3 en Ependymal.
+
+
+We can extract the pseudotime values and put it in the Seurat metadata. We can then either display it with a classical Seurat FeaturePlot (not shown here), or use ggplot2.
+```{r, fig.width=10, fig.asp=.8}
+
+# Add lineage1 to metadata
+name = "Lineage1"
+TAP2_qNSCs@meta.data[[paste0("pseudotime_", name)]] <- pt[[name]]
+
+# create dataframe with umap coordinates and pseudotime
+map_coord <- as.data.frame(TAP2_qNSCs@reductions$umap@cell.embeddings)
+map_coord$pseudo <- TAP2_qNSCs@meta.data[[paste0("pseudotime_", name)]]
+# Separate between cells having a pseudotime and cells having no pseudotime. Cells with a pseudotime will be shown on the foreground.
+map_coord_na <- subset(map_coord, (is.na(map_coord[,3])))
+map_coord_no_na <- subset(map_coord, (!is.na(map_coord[,3])))
+a <- ggplot(data = map_coord_na, aes(x = UMAP_1, y = UMAP_2, colour = pseudo)) + 
+  geom_point() +
+  geom_point(data = map_coord_no_na) + 
+  scale_colour_viridis_c(na.value = "grey90") +
+  ggtitle(name) +
+  theme(axis.line=element_blank(),
+        axis.text.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks=element_blank(),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank(),
+        panel.background=element_blank())
+
+name = "Lineage2"
+TAP2_qNSCs@meta.data[[paste0("pseudotime_", name)]] <- pt[[name]]
+
+map_coord <- as.data.frame(TAP2_qNSCs@reductions$umap@cell.embeddings)
+map_coord$pseudo <- TAP2_qNSCs@meta.data[[paste0("pseudotime_", name)]]
+map_coord_na <- subset(map_coord, (is.na(map_coord[,3])))
+map_coord_no_na <- subset(map_coord, (!is.na(map_coord[,3])))
+b <- ggplot(data = map_coord_na, aes(x = UMAP_1, y = UMAP_2, colour = pseudo)) + 
+  geom_point() +
+  geom_point(data = map_coord_no_na) + 
+  scale_colour_viridis_c(na.value = "grey90") +
+  ggtitle(name) +
+  theme(axis.line=element_blank(),
+        axis.text.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks=element_blank(),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank(),
+        panel.background=element_blank())
+
+# Recreate seurat DimPlot using ggplot
+map_coord <- as.data.frame(TAP2_qNSCs@reductions$umap@cell.embeddings)
+map_coord$clusters <- TAP2_qNSCs@meta.data$clusters
+c <- ggplot(data = map_coord, aes(x = UMAP_1, y = UMAP_2, colour = clusters)) + 
+  geom_point() +
+  ggtitle("Dimplot") +
+  theme(axis.line=element_blank(),
+        axis.text.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks=element_blank(),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank(),
+        panel.background=element_blank())
+
+gridExtra::grid.arrange(a, b, c, ncol = 2)
+```
+
+Now the pseudotime can be used with tools like tradeSeq to further analyse the dataset direction.

@@ -1,0 +1,155 @@
+---
+title: "Analyzing genes along pseudotime"
+author: "[LabEx CORTEX Bioinformatics Platform - Lyon 1 University -](https://labex-cortex.universite-lyon.fr/) <br>Vignette produced by Emeric Texeraud"
+date: "`r Sys.Date()`"
+output: 
+  html_notebook:
+    toc: true
+---
+
+# Load the Seurat object
+```{r}
+suppressMessages({
+  library(tidyverse)
+  library(Seurat)
+  library(slingshot)
+  library(viridis)
+  library(ggplot2)
+  library(tradeSeq)
+  library(zoo)
+  library(scales)
+  library(pheatmap)
+})
+
+# Load the dataset
+TAP2_qNSCs <- readRDS("/mnt/Data1/public_vignettes/seurat_data/TAP2_qNSCs.rds")
+DefaultAssay(TAP2_qNSCs) <- "SCT"
+sling <- readRDS("/mnt/Data1/public_vignettes/pseudotime_data/TAP2_qNSCs_slingdataset.rds")
+```
+
+# Run tradeSeq
+We extract the counts matrix, tradeSeq need the count matrix and not the normalized matrix, so we must extract it from assay RNA. We only use the 3000 variable features, because for all genes it takes an absurd amount of time to run. Even with 3000 genes it can easily take dozens of minutes.
+```{r}
+variableGenes <- TAP2_qNSCs@assays[["SCT"]]@var.features
+counts <- as.matrix(TAP2_qNSCs@assays$RNA@counts)[variableGenes,]
+```
+
+We run evaluateK function, which will give us the best K parameter for the fitGAM.
+```{r, fig.width=10, fig.asp=0.3}
+# prepare multithreading
+BPPARAM <- BiocParallel::bpparam()
+BPPARAM$workers <- 32 # use ncores
+
+# Evaluate k, run if you don't know how many knots to use in fitGAM
+icMat <- evaluateK(counts = counts, sds = sling, k = 3:10,
+                   nGenes = 200, verbose = F,  BPPARAM = BPPARAM)
+```
+We take k=9. A k too high will increase the risk of overfitting, while a k too low will decrease precision.
+
+We make the data for each gene fit a GAM. This fitting will later be used for finding genes with varying expression along pseudotime.
+```{r}
+# fitGAM and save output
+sce <- fitGAM(counts = counts, sds = sling, nknots = 9, verbose = FALSE, parallel=TRUE, BPPARAM = BPPARAM)
+saveRDS(sce, file="/mnt/Data1/public_vignettes/pseudotime_data/TAP2_qNSCs_fitGAM.rds")
+```
+
+# Within-Lineage comparisons
+We can find the genes whose expression is associated with any of the pseudotime graphs. The null hypothesis tested by the `associationTest` is that the average expression of all genes is the same along pseudotime.
+```{r}
+assoRes <- associationTest(sce)
+write.csv(assoRes, file = "/mnt/Data1/public_vignettes/pseudotime_data/TAP2_qNSCs_association.csv")
+orderedassoRes <- assoRes %>% arrange(desc(waldStat))
+```
+
+Here we extract pseudotime for graph 1, clusters and expression matrix with only genes of interest (top X genes from the result of association test). We then order the genes following their peak expression along pseudotime (genes express at the beginning of the pseudotime will be at the top of the heatmap, and genes expressed at the end will be at the bottom).
+```{r}
+assoRes_heat <- orderedassoRes[1:200,]
+pseudo <- as.data.frame(slingPseudotime(sling))
+pseudo1 <- pseudo[!is.na(pseudo$Lineage1),]
+pseudo1 <- pseudo1 %>% arrange(Lineage1)
+
+# reorder genes for heatmap following pseudotime, and rescale counts
+counts_heat <- counts[row.names(assoRes_heat),row.names(pseudo1)]
+# sliding window to order genes
+counts_heat_ordered <- counts_heat[order(apply(t(rollapply(t(counts_heat), width=5, by=1, FUN=mean)), 1, which.max)), ]
+counts_heat_scaled <- t(apply(counts_heat_ordered, 1, rescale))
+
+# get clusters
+clusters <- TAP2_qNSCs@meta.data$clusters
+clusters <- as.data.frame(clusters, row.names = Cells(TAP2_qNSCs))
+clusters <- as.data.frame(clusters[row.names(pseudo1), 'clusters'], row.names=row.names(pseudo1))
+names(clusters)[names(clusters) == 'clusters[row.names(pseudo1), "clusters"]'] <- 'clusters'
+```
+
+Plot the Heatmap.
+```{r, fig.width=10, fig.asp=0.7}
+pheatmap(counts_heat_scaled, main = "main", 
+         cluster_rows = FALSE, cluster_cols = FALSE, 
+         show_rownames = FALSE, show_colnames = FALSE,
+         annotation_col = clusters, color = magma(100), fontsize_row = 8)
+```
+
+We can also use the genes found be the `associationTest` to plot them using anything we want, with Seurat `FeaturePlot` for example.
+```{r, fig.width=12, fig.asp=1}
+genes <- row.names(orderedassoRes)[1:12]
+FeaturePlot(TAP2_qNSCs, features = genes, ncol = 3)
+```
+
+# Run start vs end test
+Another statistical test we can use is the `startVsEndTest`, which compares the expression of each genes between the start and the end of the trajectory. But it can also compare between any 2 points of the trajectory (with 0 being the start and 1 the end), we just need to use the `pseudotimeValues` argument, for example setting it to c(0, 0.5) or c(0.5, 1) if we want to compare the start and middle or middle and end points.
+```{r}
+sve <- startVsEndTest(sce, pseudotimeValues = c(0,0.5))
+write.csv(sve, file = "/mnt/Data1/public_vignettes/pseudotime_data/TAP2_qNSCs_startVsEnd.csv")
+```
+
+We can plot the evolution of gene expression along pseudotime, using any of the genes from the previous tests.
+```{r}
+# extract counts matrix as dataframe and add pseudotime
+counts1 = as.data.frame(t(as.matrix(TAP2_qNSCs@assays$RNA@data)))
+counts1$pseudotime <- TAP2_qNSCs$pseudotime_Lineage1
+counts1 <- counts1[!is.na(counts1$pseudotime),]
+counts1$group <- "graph1"
+
+counts2 = as.data.frame(t(as.matrix(TAP2_qNSCs@assays$RNA@data)))
+counts2$pseudotime <- TAP2_qNSCs$pseudotime_Lineage2
+counts2 <- counts2[!is.na(counts2$pseudotime),]
+counts2$group <- "graph2"
+
+counts <- rbind(counts1, counts2)
+
+sve <- sve %>% arrange(desc(waldStat))
+genes <- row.names(sve)[1:10]
+dataset_colors <- c(graph1 = "#ff3300", graph2 = "#0066ff")
+
+for (gene in genes) {
+  p <- ggplot(counts, aes(pseudotime, .data[[gene]], group=group, col=group)) + 
+    geom_point(alpha = 0.1) + # you can comment this line to remove points
+    geom_smooth(formula = y ~ x, size=2, method = "loess", se = FALSE) + 
+    scale_color_manual(values=dataset_colors) + 
+    labs(title = gene,
+      color = "dataset") + 
+    theme(axis.line=element_line(1),
+        panel.background=element_blank())
+  ggsave(paste0("/mnt/Data1/public_vignettes/pseudotime_data/", gene, "_expression_along_pseudotime.png"), p, device = "png", width = 2000, height = 1500, units = "px", dpi = 300) # save the plot for each gene
+  plot(p)
+}
+```
+
+# Between lineage comparison
+
+The `diffEndTest` tests for a difference between end points of the graphs. It test the null hypothesis that the average expression at the endpoints is equal for all graphs. It will in fact uncover markers of our different differentiated cells in the dataset.
+```{r}
+endRes <- diffEndTest(sce)
+write.csv(endRes, file = "/mnt/Data1/public_vignettes/pseudotime_data/TAP2_qNSCs_diffEnd.csv")
+endRes <- endRes %>% arrange(desc(waldStat))
+```
+
+We can then plot these genes like with any other test.
+
+
+
+
+
+
+
+

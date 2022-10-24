@@ -1,0 +1,91 @@
+---
+title: "Seurat merge and integration tutorial on p12"
+author: "[LabEx CORTEX Bioinformatics Platform](https://labex-cortex.universite-lyon.fr/) - Lyon University - vignette produced by Emeric Texeraud"
+date: "`r Sys.Date()`"
+output: 
+  html_notebook:
+    toc: true
+---
+
+```{r packages, warning=FALSE, include=TRUE}
+# Load packages
+suppressMessages({
+  library(tidyverse)
+  library(Seurat)
+  library(gridExtra)
+})
+```
+
+# Merge
+
+The merge approach just combines 2 matrix, keeping all genes from the two datasets, putting 0 for all cells from a dataset if the gene is not present in the dataset, and adding the cells from the second dataset to the first. It will also keep all metadata information from both, adding NAs for the cells of one of the datasets if the column is not found in this dataset.
+
+The first step is to load both the datasets we want to combine.
+```{r load datasets}
+seur_data1 <- Read10X("/mnt/Data1/Raineteau/2020_03_10X_dSVZ_p12_Nx_Hx/cellranger_count/Nx1/outs/filtered_feature_bc_matrix", strip.suffix = TRUE)
+seur1 <- CreateSeuratObject(seur_data1,  project = "clb", min.cells = 3, min.features = 100)
+
+seur_data2 <- Read10X("/mnt/Data1/Raineteau/2020_03_10X_dSVZ_p12_Nx_Hx/cellranger_count/Nx2/outs/filtered_feature_bc_matrix", strip.suffix = TRUE)
+seur2 <- CreateSeuratObject(seur_data2,  project = "clb", min.cells = 3, min.features = 100)
+```
+`seur1` has 20877 genes and 8641 cells, and `seur2` has 20740 genes and 6485 cells. 
+
+To perform the merge, we just use the generics merge function, which is defined for Seurat objects. The `add.cells.id` parameter allows us to add ids to cell names to remember from which original dataset they come. If we had a data slot (after normalization) or a dimension reduction slot, we could merge them too, with the parameters `merge.data` and `merge.dr`.
+```{r merge}
+seur <- merge(seur1, seur2, add.cell.ids = c("Nx1", "Nx2"), project = "clb", )
+```
+The final merged object has 15126 cells, which is what we were expecting, and 21648 genes. That means that there are some genes from the first dataset not found in the second, and genes found in the second not in the first. It is either because the genes were really not expressed, in this case there is no problem, or that the genes were expressed, but not detected during sequencing. If this is latter (which seems to be the case, as both datasets are the same brain region from the same species), we can either keep them, and accept that there might be some noise caused by these genes, or remove them and accept that there might be some missing genes from the analysis.
+
+The common genes between the datasets can be find, and then removed from the merged object.
+```{r common genes}
+# Find common genes
+common <- intersect(row.names(seur1), row.names(seur2)) # 19969 common genes
+# Keep only common genes and discard all other genes
+seur <- subset(seur, features = common)
+```
+We now have a merged object with still 15126 cells, and 19969 genes (being the common genes between the 2 original datasets).
+
+# Integration
+
+The goal of the integration is to merge two datasets, correcting for technical differences between datasets. To do this, the method first find "anchors", which are cell pairs that are in a matched biological states between the datasets. The final aim of the integration is to be able to perform comparative scRNA-seq analysis across experimental conditions. For example, you could integrate a dataset with cells in normal condition, and a dataset with cells in 
+
+The first step is to load both the datasets we want to combine.
+```{r load datasets integration}
+seur_data1 <- Read10X("/mnt/Data1/Raineteau/2020_03_10X_dSVZ_p12_Nx_Hx/cellranger_count/Nx1/outs/filtered_feature_bc_matrix", strip.suffix = TRUE)
+seur1 <- CreateSeuratObject(seur_data1,  project = "clb", min.cells = 3, min.features = 100)
+
+seur_data2 <- Read10X("/mnt/Data1/Raineteau/2020_03_10X_dSVZ_p12_Nx_Hx/cellranger_count/Nx2/outs/filtered_feature_bc_matrix", strip.suffix = TRUE)
+seur2 <- CreateSeuratObject(seur_data2,  project = "clb", min.cells = 3, min.features = 100)
+```
+
+We put the data in a list, prepare them for the integration and integrate the data. We can do it either using `SCTransform`...
+```{r}
+seur_list <- c(seur1, seur2)
+seur_list <- lapply(seur_list, FUN = SCTransform)
+features <- SelectIntegrationFeatures(seur_list, nfeatures = 4000)
+seur_list <- PrepSCTIntegration(seur_list, anchor.features = features)
+anchors <- FindIntegrationAnchors(object.list = seur_list, normalization.method = "SCT",
+    anchor.features = features)
+seur_integrated_sct <- IntegrateData(anchorset = anchors, normalization.method = "SCT")
+```
+
+... Or using a more classical preparation. For this one we can let the parameter `normalization.method` to default.
+```{r}
+seur_list <- c(seur1, seur2)
+# normalize and identify variable features for each dataset independently
+seur_list <- lapply(X = seur_list, FUN = function(x) {
+    x <- NormalizeData(x)
+    x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 4000)
+})
+
+features <- SelectIntegrationFeatures(object.list = seur_list)
+anchors <- FindIntegrationAnchors(object.list = seur_list, anchor.features = features)
+
+# this command creates an 'integrated' data assay
+seur_integrated <- IntegrateData(anchorset = anchors)
+```
+
+If the integration has been performed using `SCTransform`, it is possible to go directly to the PCA computation in the analysis, otherwise a scaling step is required before PCA.
+
+
+

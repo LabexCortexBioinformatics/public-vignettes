@@ -1,0 +1,60 @@
+---
+title: "Denoising single-cell data"
+author: "[LabEx CORTEX Bioinformatics Platform - Lyon 1 University -](https://labex-cortex.universite-lyon.fr/) <br>Vignette produced by Emeric Texeraud"
+date: "`r Sys.Date()`"
+output: 
+  html_notebook:
+    toc: true
+---
+
+# Setup object
+```{r}
+suppressMessages({
+  library(Seurat)
+  library(ggplot2)
+  library(viridis)
+  library(Rmagic)
+  library(reticulate)
+})
+
+seur <- readRDS("/mnt/Data1/public_vignettes/seurat_data/p12_new.rds")
+DefaultAssay(seur) <- "RNA"
+```
+
+For magic installation in python, go to [magic github](https://github.com/KrishnaswamyLab/MAGIC)
+```{r}
+conda_path = '/home/labex-bioinfo/python/anaconda3/condabin/conda'
+use_condaenv("r-scvelo", required = TRUE, conda = conda_path)
+```
+
+# Use magic to denoise data
+MAGIC uses a manifold graph to smooth the features and restore the structure of the data. We will run it only on a subset of genes, as it can take hours to compute on all genes.
+```{r}
+genes = c("Foxj1", "Ak7", "Pifo", "Thbs4", "Sdc4", "Lrp4", "Egfr", "Mcm2", "Ascl1", "Dcx", "Cd24a", "Nrxn3", "Aqp4", "Agt", "Lcat", "Cldn5", "Flt1", "Pecam1", "Pdgfra", "Bmp4", "Sox10", "Cd53", "Tmem119", "C1qa") # these are the markers we used to assign cell type
+seurMatrix <- as.matrix(t(seur@assays$RNA@counts))[,genes]
+
+seur_MAGIC <- magic(seurMatrix, genes=genes, n.jobs = 32)
+saveRDS(seur_MAGIC, "/mnt/Data1/public_vignettes/seurat_data/seurat_magic.rds")
+```
+
+The resulting matrix can be added to the Seurat object, or used as is.
+```{r}
+magic_assay <- CreateAssayObject(data = t(log1p(seur_MAGIC$result)), key = "magic_")
+seur@assays$magic <- magic_assay
+seur@assays$magic@key = "magic_"
+saveRDS(seur,"/mnt/Data1/public_vignettes/seurat_data/p12_magic.rds")
+```
+
+We can then use this new assay to plot the genes expression using seurat's `FeaturePlot`.
+```{r, fig.width=14, fig.asp=.4}
+DefaultAssay(seur) <- "SCT"
+p1 <- FeaturePlot(seur, features = "Aqp4", slot = "data", pt.size = 1, order = T) + NoAxes() + ggtitle("Foxj1 in SCT assay")
+DefaultAssay(seur) <- "magic"
+p2 <- FeaturePlot(seur, features = "Aqp4", slot = "data", pt.size = 1, order = T) + NoAxes() + ggtitle("Foxj1 in magic assay")
+gridExtra::grid.arrange(p1, p2, ncol = 2)
+```
+
+
+
+
+
